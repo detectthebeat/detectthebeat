@@ -3,7 +3,17 @@ import librosa
 import tempfile
 import subprocess
 import os
+import imageio_ffmpeg
 from pathlib import Path
+
+
+# --------------------------------------------------
+# FFMPEG
+# --------------------------------------------------
+
+# Get the exact path to the FFmpeg executable bundled
+# with imageio-ffmpeg. This avoids relying on the server PATH.
+FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
 
 # --------------------------------------------------
@@ -64,7 +74,7 @@ BEAT_INTERVALS = {
 
 def run_command(command, cwd=None):
     """
-    Run a command and raise a useful error if it fails.
+    Run an FFmpeg command and show a useful error if it fails.
     """
 
     result = subprocess.run(
@@ -76,7 +86,6 @@ def run_command(command, cwd=None):
     )
 
     if result.returncode != 0:
-
         error_text = result.stderr[-4000:]
 
         raise RuntimeError(
@@ -88,7 +97,7 @@ def run_command(command, cwd=None):
 
 def get_audio_duration(audio_path):
     """
-    Read audio duration without loading the full file into memory.
+    Read audio duration without using ffprobe.
     """
 
     return float(
@@ -101,9 +110,7 @@ def get_audio_duration(audio_path):
 def create_ppm(path, color):
     """
     Create a tiny 2x2 solid-color image.
-
-    FFmpeg later scales this to 1080p.
-    Using 2x2 images means almost no memory usage.
+    FFmpeg scales it to the requested video resolution.
     """
 
     width = 2
@@ -121,10 +128,7 @@ def create_ppm(path, color):
 
 def quantize_time_to_frame(time_seconds, fps):
     """
-    Move beat times onto actual video frame boundaries.
-
-    This is useful because Premiere can only make cuts
-    on video frames anyway.
+    Snap a beat time to the nearest video frame.
     """
 
     frame_number = round(time_seconds * fps)
@@ -210,6 +214,8 @@ if uploaded_file is not None:
         type="primary"
     ):
 
+        status = None
+
         try:
 
             status = st.status(
@@ -218,14 +224,13 @@ if uploaded_file is not None:
             )
 
             # Everything happens inside a temporary folder.
-            # It is automatically deleted when we're finished.
-
+            # It is automatically deleted when finished.
             with tempfile.TemporaryDirectory() as work_dir:
 
                 work_dir = Path(work_dir)
 
                 # ------------------------------------------
-                # 1. SAVE UPLOADED FILE
+                # 1. SAVE UPLOADED AUDIO
                 # ------------------------------------------
 
                 status.write(
@@ -305,16 +310,12 @@ if uploaded_file is not None:
                     "analysis.wav"
                 )
 
-                # Convert to:
-                # mono
-                # 22050 Hz
-                #
-                # This keeps beat analysis lightweight
-                # while leaving the ORIGINAL audio untouched
-                # for the final video.
+                # Convert to mono 22050 Hz WAV.
+                # The original uploaded audio remains untouched
+                # and is used in the final MP4.
 
                 run_command([
-                    "ffmpeg",
+                    FFMPEG_EXE,
                     "-y",
                     "-loglevel", "error",
                     "-i", str(audio_path),
@@ -345,7 +346,7 @@ if uploaded_file is not None:
                     )
                 )
 
-                tempo, beat_frames = (
+                _, beat_frames = (
                     librosa.beat.beat_track(
                         onset_envelope=onset_envelope,
                         sr=sr
@@ -359,13 +360,11 @@ if uploaded_file is not None:
                     )
                 )
 
-                # Free the large audio arrays immediately
-
+                # Free audio analysis data immediately
                 del y
                 del onset_envelope
 
-                # Use every 1st / 2nd / 4th beat
-
+                # Use every 1st, 2nd or 4th beat
                 selected_beats = (
                     beat_times[
                         ::BEAT_INTERVAL
@@ -397,9 +396,8 @@ if uploaded_file is not None:
                             frame_time
                         )
 
-                # Remove duplicates caused by two detected
-                # beats landing on the same video frame.
-
+                # Remove duplicates if multiple detected beats
+                # happen to land on the same video frame.
                 frame_aligned_beats = sorted(
                     set(frame_aligned_beats)
                 )
@@ -415,7 +413,7 @@ if uploaded_file is not None:
                 )
 
                 # ------------------------------------------
-                # 4. CREATE TINY COLOR IMAGES
+                # CREATE TINY COLOR IMAGES
                 # ------------------------------------------
 
                 black_path = (
@@ -473,7 +471,6 @@ if uploaded_file is not None:
                     )
 
                     # Black before first detected beat
-
                     if first_beat > 0:
 
                         segments.append(
@@ -484,7 +481,6 @@ if uploaded_file is not None:
                         )
 
                     # Colors from beat to beat
-
                     for index, start in enumerate(
                         frame_aligned_beats
                     ):
@@ -558,10 +554,9 @@ if uploaded_file is not None:
                             f"{duration:.9f}\n"
                         )
 
-                    # FFmpeg concat requires the final
-                    # image to be listed again so the
-                    # previous duration is respected.
-
+                    # FFmpeg concat needs the final image
+                    # listed once more so its duration
+                    # is respected.
                     if segments:
 
                         timeline.write(
@@ -570,7 +565,7 @@ if uploaded_file is not None:
                         )
 
                 # ------------------------------------------
-                # RENDER FINAL VIDEO
+                # 4. RENDER FINAL VIDEO
                 # ------------------------------------------
 
                 status.write(
@@ -584,7 +579,7 @@ if uploaded_file is not None:
 
                 run_command(
                     [
-                        "ffmpeg",
+                        FFMPEG_EXE,
                         "-y",
                         "-loglevel", "error",
 
@@ -615,20 +610,20 @@ if uploaded_file is not None:
                         # Constant frame rate
                         "-r", FPS_FFMPEG,
 
-                        # H.264
+                        # H.264 video
                         "-c:v", "libx264",
 
                         # Fast rendering
                         "-preset", "ultrafast",
 
-                        # Good quality
+                        # High visual quality
                         "-crf", "18",
 
                         # AAC audio
                         "-c:a", "aac",
                         "-b:a", "192k",
 
-                        # Stop at end of audio
+                        # Stop at end of shortest stream
                         "-shortest",
 
                         # Better browser compatibility
@@ -639,8 +634,9 @@ if uploaded_file is not None:
                     cwd=str(work_dir)
                 )
 
-                # Read finished file into memory.
-                # Temporary working files can then disappear.
+                # ------------------------------------------
+                # LOAD FINISHED VIDEO
+                # ------------------------------------------
 
                 video_bytes = (
                     output_path.read_bytes()
@@ -683,13 +679,14 @@ if uploaded_file is not None:
 
         except Exception as error:
 
-            try:
-                status.update(
-                    label="Something went wrong",
-                    state="error"
-                )
-            except Exception:
-                pass
+            if status is not None:
+                try:
+                    status.update(
+                        label="Something went wrong",
+                        state="error"
+                    )
+                except Exception:
+                    pass
 
             st.error(
                 "Video generation failed."
