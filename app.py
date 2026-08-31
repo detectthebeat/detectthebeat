@@ -88,18 +88,14 @@ def run_command(command, cwd=None):
 
 def get_audio_duration(audio_path):
     """
-    Use ffprobe instead of MoviePy to read duration.
+    Read audio duration without loading the full file into memory.
     """
 
-    result = run_command([
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        audio_path
-    ])
-
-    return float(result.stdout.strip())
+    return float(
+        librosa.get_duration(
+            path=audio_path
+        )
+    )
 
 
 def create_ppm(path, color):
