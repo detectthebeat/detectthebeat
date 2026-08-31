@@ -2,6 +2,7 @@ import streamlit as st
 import librosa
 import tempfile
 import subprocess
+import math
 import imageio_ffmpeg
 from pathlib import Path
 
@@ -33,11 +34,13 @@ st.write(
 
 MAX_AUDIO_DURATION = 6 * 60  # 6 minutes
 
+
 VIDEO_SIZES = {
     "16:9": (1920, 1080),
     "9:16": (1080, 1920),
     "1:1": (1080, 1080),
 }
+
 
 FPS_OPTIONS = {
     "25 fps": {
@@ -50,11 +53,18 @@ FPS_OPTIONS = {
     },
 }
 
+
 BEAT_INTERVALS = {
     "Every beat": 1,
     "Every 2 beats": 2,
     "Every 4 beats": 4,
 }
+
+
+# Low-resolution internal video.
+# FFmpeg scales this up during encoding.
+INTERNAL_WIDTH = 64
+INTERNAL_HEIGHT = 36
 
 
 # --------------------------------------------------
@@ -63,7 +73,7 @@ BEAT_INTERVALS = {
 
 def run_command(command, cwd=None):
     """
-    Run an FFmpeg command and show a useful error if it fails.
+    Run FFmpeg and raise a useful error if it fails.
     """
 
     result = subprocess.run(
@@ -75,7 +85,8 @@ def run_command(command, cwd=None):
     )
 
     if result.returncode != 0:
-        error_text = result.stderr[-4000:]
+
+        error_text = result.stderr[-5000:]
 
         raise RuntimeError(
             f"FFmpeg error:\n{error_text}"
@@ -96,46 +107,34 @@ def get_audio_duration(audio_path):
     )
 
 
-def create_solid_ppm(path, color):
+def create_solid_frame(
+    width,
+    height,
+    color
+):
     """
-    Create a small solid-color PPM image.
+    Create one RGB frame as raw bytes.
     """
-
-    width = 64
-    height = 36
-
-    header = (
-        f"P6\n{width} {height}\n255\n"
-    ).encode()
 
     pixel = bytes(color)
-    pixels = pixel * (width * height)
 
-    with open(path, "wb") as file:
-        file.write(header)
-        file.write(pixels)
+    return pixel * (
+        width * height
+    )
 
 
-def create_checkerboard_ppm(
-    path,
+def create_checkerboard_frame(
+    width,
+    height,
     inverted=False
 ):
     """
-    Create a high-contrast checkerboard.
+    Create a high-contrast RGB checkerboard frame.
 
-    Pattern A and Pattern B are exact opposites,
-    so almost every pixel changes on every beat.
+    Pattern A and Pattern B are exact opposites.
     """
 
-    width = 64
-    height = 36
-
-    # Size of each checker square
     block_size = 4
-
-    header = (
-        f"P6\n{width} {height}\n255\n"
-    ).encode()
 
     pixels = bytearray()
 
@@ -153,32 +152,55 @@ def create_checkerboard_ppm(
                 checker = 1 - checker
 
             if checker == 0:
+
                 pixels.extend(
                     (0, 0, 0)
                 )
+
             else:
+
                 pixels.extend(
                     (255, 255, 255)
                 )
 
-    with open(path, "wb") as file:
-        file.write(header)
-        file.write(pixels)
+    return bytes(pixels)
 
 
-def quantize_time_to_frame(
+def beat_time_to_frame(
     time_seconds,
     fps
 ):
     """
-    Snap beat time to the nearest video frame.
+    Convert a detected beat time directly to
+    the nearest video frame number.
     """
 
-    frame_number = round(
+    return round(
         time_seconds * fps
     )
 
-    return frame_number / fps
+
+# --------------------------------------------------
+# PRE-CREATE VISUAL FRAMES
+# --------------------------------------------------
+
+BLACK_FRAME = create_solid_frame(
+    INTERNAL_WIDTH,
+    INTERNAL_HEIGHT,
+    (0, 0, 0)
+)
+
+PATTERN_A_FRAME = create_checkerboard_frame(
+    INTERNAL_WIDTH,
+    INTERNAL_HEIGHT,
+    inverted=False
+)
+
+PATTERN_B_FRAME = create_checkerboard_frame(
+    INTERNAL_WIDTH,
+    INTERNAL_HEIGHT,
+    inverted=True
+)
 
 
 # --------------------------------------------------
@@ -187,7 +209,11 @@ def quantize_time_to_frame(
 
 uploaded_file = st.file_uploader(
     "Upload audio",
-    type=["mp3", "wav", "m4a"]
+    type=[
+        "mp3",
+        "wav",
+        "m4a"
+    ]
 )
 
 st.caption(
@@ -199,7 +225,9 @@ st.caption(
 # VIDEO SETTINGS
 # --------------------------------------------------
 
-st.subheader("Video settings")
+st.subheader(
+    "Video settings"
+)
 
 format_choice = st.radio(
     "Video format",
@@ -228,6 +256,7 @@ beat_choice = st.radio(
         "Every 4 beats"
     ]
 )
+
 
 VIDEO_WIDTH, VIDEO_HEIGHT = (
     VIDEO_SIZES[
@@ -260,7 +289,9 @@ BEAT_INTERVAL = (
 
 if uploaded_file is not None:
 
-    st.audio(uploaded_file)
+    st.audio(
+        uploaded_file
+    )
 
     if st.button(
         "🚀 Generate Video",
@@ -287,7 +318,7 @@ if uploaded_file is not None:
                 # ------------------------------------------
 
                 status.write(
-                    "1/4 · Checking audio"
+                    "1/5 · Checking audio"
                 )
 
                 extension = Path(
@@ -299,6 +330,7 @@ if uploaded_file is not None:
                     ".wav",
                     ".m4a"
                 ]:
+
                     extension = ".mp3"
 
                 audio_path = (
@@ -357,11 +389,11 @@ if uploaded_file is not None:
                 )
 
                 # ------------------------------------------
-                # 2. PREPARE ANALYSIS AUDIO
+                # 2. PREPARE AUDIO FOR ANALYSIS
                 # ------------------------------------------
 
                 status.write(
-                    "2/4 · Preparing audio for beat detection"
+                    "2/5 · Preparing audio for beat detection"
                 )
 
                 analysis_path = (
@@ -373,10 +405,18 @@ if uploaded_file is not None:
                     FFMPEG_EXE,
                     "-y",
                     "-loglevel", "error",
-                    "-i", str(audio_path),
+
+                    "-i",
+                    str(audio_path),
+
                     "-vn",
-                    "-ac", "1",
-                    "-ar", "22050",
+
+                    "-ac",
+                    "1",
+
+                    "-ar",
+                    "22050",
+
                     str(analysis_path)
                 ])
 
@@ -385,7 +425,7 @@ if uploaded_file is not None:
                 # ------------------------------------------
 
                 status.write(
-                    "3/4 · Detecting beats"
+                    "3/5 · Detecting beats"
                 )
 
                 y, sr = librosa.load(
@@ -425,33 +465,38 @@ if uploaded_file is not None:
                 )
 
                 # ------------------------------------------
-                # SNAP BEATS TO VIDEO FRAMES
+                # CONVERT BEATS DIRECTLY TO FRAME NUMBERS
                 # ------------------------------------------
 
-                frame_aligned_beats = []
+                total_video_frames = math.ceil(
+                    total_duration * FPS_VALUE
+                )
+
+                scene_change_frames = []
 
                 for beat in selected_beats:
 
-                    frame_time = (
-                        quantize_time_to_frame(
+                    frame_number = (
+                        beat_time_to_frame(
                             float(beat),
                             FPS_VALUE
                         )
                     )
 
                     if (
-                        frame_time > 0
+                        frame_number > 0
                         and
-                        frame_time < total_duration
+                        frame_number < total_video_frames
                     ):
 
-                        frame_aligned_beats.append(
-                            frame_time
+                        scene_change_frames.append(
+                            frame_number
                         )
 
-                frame_aligned_beats = sorted(
+                # Remove duplicate frame numbers
+                scene_change_frames = sorted(
                     set(
-                        frame_aligned_beats
+                        scene_change_frames
                     )
                 )
 
@@ -462,172 +507,91 @@ if uploaded_file is not None:
 
                 status.write(
                     f"Creating "
-                    f"{len(frame_aligned_beats)} "
+                    f"{len(scene_change_frames)} "
                     f"scene changes"
                 )
 
                 # ------------------------------------------
-                # CREATE VISUAL PATTERNS
-                # ------------------------------------------
-
-                black_path = (
-                    work_dir /
-                    "black.ppm"
-                )
-
-                pattern_a_path = (
-                    work_dir /
-                    "pattern_a.ppm"
-                )
-
-                pattern_b_path = (
-                    work_dir /
-                    "pattern_b.ppm"
-                )
-
-                create_solid_ppm(
-                    black_path,
-                    (0, 0, 0)
-                )
-
-                create_checkerboard_ppm(
-                    pattern_a_path,
-                    inverted=False
-                )
-
-                create_checkerboard_ppm(
-                    pattern_b_path,
-                    inverted=True
-                )
-
-                # ------------------------------------------
-                # BUILD VIDEO TIMELINE
-                # ------------------------------------------
-
-                segments = []
-
-                if (
-                    len(
-                        frame_aligned_beats
-                    )
-                    == 0
-                ):
-
-                    segments.append(
-                        (
-                            black_path,
-                            total_duration
-                        )
-                    )
-
-                else:
-
-                    first_beat = (
-                        frame_aligned_beats[0]
-                    )
-
-                    # Black until first beat
-                    if first_beat > 0:
-
-                        segments.append(
-                            (
-                                black_path,
-                                first_beat
-                            )
-                        )
-
-                    # Alternate between opposite
-                    # checkerboards on every selected beat.
-                    for index, start in enumerate(
-                        frame_aligned_beats
-                    ):
-
-                        if (
-                            index + 1
-                            <
-                            len(
-                                frame_aligned_beats
-                            )
-                        ):
-
-                            end = (
-                                frame_aligned_beats[
-                                    index + 1
-                                ]
-                            )
-
-                        else:
-
-                            end = total_duration
-
-                        duration = (
-                            end - start
-                        )
-
-                        if duration <= 0:
-                            continue
-
-                        if index % 2 == 0:
-
-                            pattern_file = (
-                                pattern_a_path
-                            )
-
-                        else:
-
-                            pattern_file = (
-                                pattern_b_path
-                            )
-
-                        segments.append(
-                            (
-                                pattern_file,
-                                duration
-                            )
-                        )
-
-                # ------------------------------------------
-                # CREATE FFMPEG TIMELINE
-                # ------------------------------------------
-
-                timeline_path = (
-                    work_dir /
-                    "timeline.txt"
-                )
-
-                with open(
-                    timeline_path,
-                    "w"
-                ) as timeline:
-
-                    for (
-                        image_path,
-                        duration
-                    ) in segments:
-
-                        timeline.write(
-                            f"file "
-                            f"'{image_path.name}'\n"
-                        )
-
-                        timeline.write(
-                            f"duration "
-                            f"{duration:.9f}\n"
-                        )
-
-                    if segments:
-
-                        timeline.write(
-                            f"file "
-                            f"'{segments[-1][0].name}'\n"
-                        )
-
-                # ------------------------------------------
-                # 4. RENDER VIDEO
+                # 4. BUILD FRAME-ACCURATE RAW VIDEO
                 # ------------------------------------------
 
                 status.write(
-                    "4/4 · Rendering video"
+                    "4/5 · Building frame-accurate video"
+                )
+
+                raw_video_path = (
+                    work_dir /
+                    "reference.rgb"
+                )
+
+                change_index = 0
+                pattern_index = -1
+
+                with open(
+                    raw_video_path,
+                    "wb"
+                ) as raw_video:
+
+                    for frame_number in range(
+                        total_video_frames
+                    ):
+
+                        # A scene change happens EXACTLY
+                        # when we reach its target frame.
+                        while (
+                            change_index
+                            <
+                            len(scene_change_frames)
+                            and
+                            frame_number
+                            >=
+                            scene_change_frames[
+                                change_index
+                            ]
+                        ):
+
+                            pattern_index += 1
+                            change_index += 1
+
+                        # Before first detected beat:
+                        # black screen.
+                        if pattern_index < 0:
+
+                            frame_data = (
+                                BLACK_FRAME
+                            )
+
+                        # After first beat:
+                        # alternate between the two
+                        # opposite checkerboards.
+                        elif (
+                            pattern_index
+                            %
+                            2
+                            ==
+                            0
+                        ):
+
+                            frame_data = (
+                                PATTERN_A_FRAME
+                            )
+
+                        else:
+
+                            frame_data = (
+                                PATTERN_B_FRAME
+                            )
+
+                        raw_video.write(
+                            frame_data
+                        )
+
+                # ------------------------------------------
+                # 5. ENCODE FINAL MP4
+                # ------------------------------------------
+
+                status.write(
+                    "5/5 · Rendering video"
                 )
 
                 output_path = (
@@ -635,57 +599,97 @@ if uploaded_file is not None:
                     "detectthebeat_video.mp4"
                 )
 
-                run_command(
-                    [
-                        FFMPEG_EXE,
-                        "-y",
-                        "-loglevel", "error",
+                run_command([
+                    FFMPEG_EXE,
+                    "-y",
+                    "-loglevel", "error",
 
-                        "-f", "concat",
-                        "-safe", "0",
-                        "-i", "timeline.txt",
+                    # --------------------------------------
+                    # RAW FRAME-ACCURATE VIDEO INPUT
+                    # --------------------------------------
 
-                        "-i", str(audio_path),
+                    "-f",
+                    "rawvideo",
 
-                        "-map", "0:v:0",
-                        "-map", "1:a:0",
+                    "-pix_fmt",
+                    "rgb24",
 
-                        "-vf",
-                        (
-                            f"scale="
-                            f"{VIDEO_WIDTH}:"
-                            f"{VIDEO_HEIGHT}:"
-                            f"flags=neighbor,"
-                            f"format=yuv420p"
-                        ),
+                    "-s:v",
+                    (
+                        f"{INTERNAL_WIDTH}x"
+                        f"{INTERNAL_HEIGHT}"
+                    ),
 
-                        "-r",
-                        FPS_FFMPEG,
+                    "-r",
+                    FPS_FFMPEG,
 
-                        "-c:v",
-                        "libx264",
+                    "-i",
+                    str(raw_video_path),
 
-                        "-preset",
-                        "ultrafast",
+                    # --------------------------------------
+                    # ORIGINAL AUDIO
+                    # --------------------------------------
 
-                        "-crf",
-                        "18",
+                    "-i",
+                    str(audio_path),
 
-                        "-c:a",
-                        "aac",
+                    # --------------------------------------
+                    # STREAM MAPPING
+                    # --------------------------------------
 
-                        "-b:a",
-                        "192k",
+                    "-map",
+                    "0:v:0",
 
-                        "-shortest",
+                    "-map",
+                    "1:a:0",
 
-                        "-movflags",
-                        "+faststart",
+                    # --------------------------------------
+                    # VIDEO OUTPUT
+                    # --------------------------------------
 
-                        str(output_path)
-                    ],
-                    cwd=str(work_dir)
-                )
+                    "-vf",
+                    (
+                        f"scale="
+                        f"{VIDEO_WIDTH}:"
+                        f"{VIDEO_HEIGHT}:"
+                        f"flags=neighbor,"
+                        f"format=yuv420p"
+                    ),
+
+                    "-c:v",
+                    "libx264",
+
+                    "-preset",
+                    "ultrafast",
+
+                    "-crf",
+                    "18",
+
+                    # --------------------------------------
+                    # AUDIO OUTPUT
+                    # --------------------------------------
+
+                    "-c:a",
+                    "aac",
+
+                    "-b:a",
+                    "192k",
+
+                    # --------------------------------------
+                    # MP4 SETTINGS
+                    # --------------------------------------
+
+                    "-shortest",
+
+                    "-movflags",
+                    "+faststart",
+
+                    str(output_path)
+                ])
+
+                # ------------------------------------------
+                # LOAD RESULT
+                # ------------------------------------------
 
                 video_bytes = (
                     output_path.read_bytes()
@@ -703,7 +707,7 @@ if uploaded_file is not None:
 
             st.success(
                 f"Created "
-                f"{len(frame_aligned_beats)} "
+                f"{len(scene_change_frames)} "
                 f"scene changes."
             )
 
@@ -714,14 +718,16 @@ if uploaded_file is not None:
             st.download_button(
                 label="📥 Download Video",
                 data=video_bytes,
-                file_name="detectthebeat_video.mp4",
+                file_name=(
+                    "detectthebeat_video.mp4"
+                ),
                 mime="video/mp4"
             )
 
             st.info(
                 "Import the MP4 into your editing software "
                 "and use Scene Edit Detection to create cuts "
-                "at the pattern changes."
+                "at the checkerboard changes."
             )
 
         except Exception as error:
@@ -729,12 +735,14 @@ if uploaded_file is not None:
             if status is not None:
 
                 try:
+
                     status.update(
                         label="Something went wrong",
                         state="error"
                     )
 
                 except Exception:
+
                     pass
 
             st.error(
