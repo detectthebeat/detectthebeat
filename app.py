@@ -28,7 +28,7 @@ st.write(
     "Premiere Pro or similar editing software."
 )
 
-MAX_AUDIO_DURATION = 6 * 60
+MAX_AUDIO_DURATION = 6 * 60  # 6 minutes
 
 COLOR_PALETTE = [
     (255, 0, 0),       # Red
@@ -113,7 +113,10 @@ if uploaded_file is not None:
 
         try:
 
-            # Save uploaded audio
+            # ------------------------------------------
+            # SAVE AUDIO TEMPORARILY
+            # ------------------------------------------
+
             file_extension = os.path.splitext(
                 uploaded_file.name
             )[1].lower()
@@ -129,7 +132,10 @@ if uploaded_file is not None:
                 tmp_audio.write(uploaded_file.getvalue())
                 audio_path = tmp_audio.name
 
-            # Check audio duration
+            # ------------------------------------------
+            # CHECK AUDIO DURATION
+            # ------------------------------------------
+
             with st.spinner("Checking audio..."):
 
                 audio_clip = AudioFileClip(audio_path)
@@ -142,17 +148,27 @@ if uploaded_file is not None:
                     )
                     st.stop()
 
-            # Detect beats
+            # ------------------------------------------
+            # DETECT BEATS
+            # ------------------------------------------
+
             with st.spinner("Detecting beats..."):
 
+                # Lower sample rate keeps memory usage much lower.
+                # 22050 Hz is more than enough for beat detection.
                 y, sr = librosa.load(
                     audio_path,
-                    sr=None,
+                    sr=22050,
                     mono=True
                 )
 
-                _, beat_frames = librosa.beat.beat_track(
+                onset_env = librosa.onset.onset_strength(
                     y=y,
+                    sr=sr
+                )
+
+                _, beat_frames = librosa.beat.beat_track(
+                    onset_envelope=onset_env,
                     sr=sr
                 )
 
@@ -163,7 +179,14 @@ if uploaded_file is not None:
 
                 selected_beats = beat_times[::BEAT_INTERVAL]
 
-            # Create video
+                # Free the large waveform from memory
+                del y
+                del onset_env
+
+            # ------------------------------------------
+            # CREATE COLOR VIDEO
+            # ------------------------------------------
+
             clips = []
 
             if len(selected_beats) == 0:
@@ -180,7 +203,7 @@ if uploaded_file is not None:
 
                 first_beat = float(selected_beats[0])
 
-                # Black before first detected beat
+                # Black before the first detected beat
                 if first_beat > 0:
 
                     clips.append(
@@ -231,6 +254,10 @@ if uploaded_file is not None:
                     "Could not create video sections."
                 )
 
+            # ------------------------------------------
+            # COMBINE VIDEO
+            # ------------------------------------------
+
             final_video = concatenate_videoclips(
                 clips,
                 method="chain"
@@ -240,7 +267,10 @@ if uploaded_file is not None:
                 audio_clip
             )
 
-            # Unique temporary output
+            # ------------------------------------------
+            # UNIQUE TEMP OUTPUT
+            # ------------------------------------------
+
             output_filename = (
                 f"detectthebeat_{uuid.uuid4().hex[:8]}.mp4"
             )
@@ -250,7 +280,10 @@ if uploaded_file is not None:
                 output_filename
             )
 
-            # Render
+            # ------------------------------------------
+            # EXPORT
+            # ------------------------------------------
+
             with st.spinner("Rendering video..."):
 
                 final_video.write_videofile(
@@ -259,11 +292,14 @@ if uploaded_file is not None:
                     codec="libx264",
                     audio_codec="aac",
                     preset="medium",
-                    threads=4,
+                    threads=2,
                     logger=None
                 )
 
-            # Result
+            # ------------------------------------------
+            # RESULT
+            # ------------------------------------------
+
             st.success(
                 f"Done! Detected {len(beat_times)} beats and "
                 f"created {len(selected_beats)} color changes."
