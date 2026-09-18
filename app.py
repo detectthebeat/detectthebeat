@@ -12,9 +12,9 @@ from pathlib import Path
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
 
-# ---------------------------------------------------------
+# =========================================================
 # PAGE
-# ---------------------------------------------------------
+# =========================================================
 
 st.set_page_config(
     page_title="DetectTheBeat",
@@ -31,9 +31,9 @@ st.write(
 )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # SETTINGS
-# ---------------------------------------------------------
+# =========================================================
 
 MAX_AUDIO_DURATION = 6 * 60
 
@@ -45,12 +45,21 @@ INTERNAL_HEIGHT = 36
 
 HOP_LENGTH = 512
 
+# Keep an editing rhythm locked for approximately
+# one musical phrase before reconsidering it.
+PHRASE_BEATS = 16
+
+# How much better a new alignment must be before
+# DetectTheBeat is allowed to change its mind.
+SWITCH_MARGIN = 0.10
+
 
 FPS_OPTIONS = {
     "25 fps": {
         "value": 25.0,
         "ffmpeg": "25"
     },
+
     "23.976 fps": {
         "value": 24000 / 1001,
         "ffmpeg": "24000/1001"
@@ -65,9 +74,9 @@ BEAT_INTERVALS = {
 }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # GENERAL FUNCTIONS
-# ---------------------------------------------------------
+# =========================================================
 
 def run_command(command, cwd=None):
 
@@ -109,9 +118,9 @@ def beat_time_to_frame(
     )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # FILENAME
-# ---------------------------------------------------------
+# =========================================================
 
 def make_output_filename(
     original_name,
@@ -122,6 +131,7 @@ def make_output_filename(
         original_name
     ).stem
 
+    # Remove filename characters that can cause problems.
     song_name = re.sub(
         r'[<>:"/\\|?*]',
         '',
@@ -131,11 +141,13 @@ def make_output_filename(
     if not song_name:
         song_name = "Song"
 
+
     beat_labels = {
         "Every beat": "EveryBeat",
         "Every 2 beats": "Every2Beats",
         "Every 4 beats": "Every4Beats",
     }
+
 
     return (
         f"{song_name}_"
@@ -144,9 +156,9 @@ def make_output_filename(
     )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # CHECKERBOARD
-# ---------------------------------------------------------
+# =========================================================
 
 def create_solid_frame(
     width,
@@ -171,6 +183,7 @@ def create_checkerboard_frame(
 
     pixels = bytearray()
 
+
     for y in range(height):
 
         for x in range(width):
@@ -185,8 +198,11 @@ def create_checkerboard_frame(
                 )
             ) % 2
 
+
             if inverted:
+
                 checker = 1 - checker
+
 
             if checker == 0:
 
@@ -199,6 +215,7 @@ def create_checkerboard_frame(
                 pixels.extend(
                     (255, 255, 255)
                 )
+
 
     return bytes(pixels)
 
@@ -228,9 +245,9 @@ PATTERN_B_FRAME = (
 )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # MUSIC ANALYSIS
-# ---------------------------------------------------------
+# =========================================================
 
 def normalize_feature(values):
 
@@ -239,19 +256,23 @@ def normalize_feature(values):
         dtype=float
     )
 
+
     if len(values) == 0:
 
         return values
+
 
     low = np.percentile(
         values,
         10
     )
 
+
     high = np.percentile(
         values,
         90
     )
+
 
     if high <= low:
 
@@ -259,11 +280,13 @@ def normalize_feature(values):
             values
         )
 
+
     normalized = (
         values - low
     ) / (
         high - low
     )
+
 
     return np.clip(
         normalized,
@@ -272,106 +295,79 @@ def normalize_feature(values):
     )
 
 
-def sample_feature_at_beats(
-    feature,
-    beat_frames,
-    radius=1
+def match_feature_length(
+    values,
+    target_length
 ):
 
-    """
-    Instead of reading exactly one analysis frame,
-    take the strongest value very close to the beat.
-
-    This helps when the detected beat lands a few
-    milliseconds before or after the transient.
-    """
-
-    results = []
-
-    feature_length = len(
-        feature
-    )
-
-    for frame in beat_frames:
-
-        frame = int(frame)
-
-        start = max(
-            0,
-            frame - radius
-        )
-
-        end = min(
-            feature_length,
-            frame + radius + 1
-        )
-
-        if end <= start:
-
-            results.append(0.0)
-
-        else:
-
-            results.append(
-                float(
-                    np.max(
-                        feature[
-                            start:end
-                        ]
-                    )
-                )
-            )
-
-    return np.asarray(
-        results
+    values = np.asarray(
+        values,
+        dtype=float
     )
 
 
-def get_beat_accent_scores(
+    if len(values) == target_length:
+
+        return values
+
+
+    if len(values) > target_length:
+
+        return values[
+            :target_length
+        ]
+
+
+    if len(values) == 0:
+
+        return np.zeros(
+            target_length
+        )
+
+
+    padding = np.full(
+        target_length - len(values),
+        values[-1]
+    )
+
+
+    return np.concatenate(
+        [
+            values,
+            padding
+        ]
+    )
+
+
+def build_accent_curve(
     y,
     sr,
-    beat_frames,
     onset_envelope
 ):
 
     """
-    Scores each detected beat according to how
-    useful it is likely to be as an editing hit.
+    Build one continuous musical-strength curve.
 
     We combine:
 
-    55% transient/onset strength
-    30% bass/kick energy
-    15% overall energy
+    - transient/onset strength
+    - low-frequency kick/bass energy
+    - overall loudness
 
-    We also give a small boost to beats that are
-    noticeably stronger than their immediate neighbors.
+    This curve lets us test not only Librosa's exact
+    beat positions, but also nearby positions.
+
+    That is important for songs where an intro/pickup
+    causes the original beat grid to start slightly early.
     """
 
-    if len(beat_frames) == 0:
-
-        return np.array([])
-
-
-    # -----------------------------------------------------
-    # ONSET / TRANSIENT STRENGTH
-    # -----------------------------------------------------
-
-    onset_at_beats = (
-        sample_feature_at_beats(
-            onset_envelope,
-            beat_frames,
-            radius=1
-        )
-    )
-
-    onset_scores = normalize_feature(
-        onset_at_beats
+    onset_curve = normalize_feature(
+        onset_envelope
     )
 
 
     # -----------------------------------------------------
-    # LOW FREQUENCY / KICK / BASS ENERGY
+    # LOW-FREQUENCY ENERGY
     # -----------------------------------------------------
 
     mel = librosa.feature.melspectrogram(
@@ -385,6 +381,7 @@ def get_beat_accent_scores(
         power=1.0
     )
 
+
     mel_frequencies = (
         librosa.mel_frequencies(
             n_mels=32,
@@ -393,554 +390,940 @@ def get_beat_accent_scores(
         )
     )
 
+
     bass_mask = (
         mel_frequencies <= 180
     )
 
-    if np.any(bass_mask):
 
-        bass_energy = np.mean(
-            mel[bass_mask, :],
+    if np.any(
+        bass_mask
+    ):
+
+        bass_curve = np.mean(
+            mel[
+                bass_mask,
+                :
+            ],
             axis=0
-        )
-
-        bass_at_beats = (
-            sample_feature_at_beats(
-                bass_energy,
-                beat_frames,
-                radius=1
-            )
-        )
-
-        bass_scores = (
-            normalize_feature(
-                bass_at_beats
-            )
         )
 
     else:
 
-        bass_scores = (
-            np.zeros_like(
-                onset_scores
-            )
+        bass_curve = np.zeros(
+            mel.shape[1]
         )
 
 
-    # Free mel data as soon as possible
     del mel
 
 
-    # -----------------------------------------------------
-    # GENERAL ENERGY
-    # -----------------------------------------------------
-
-    rms = librosa.feature.rms(
-        y=y,
-        frame_length=1024,
-        hop_length=HOP_LENGTH
-    )[0]
-
-    rms_at_beats = (
-        sample_feature_at_beats(
-            rms,
-            beat_frames,
-            radius=1
-        )
-    )
-
-    rms_scores = normalize_feature(
-        rms_at_beats
+    bass_curve = normalize_feature(
+        bass_curve
     )
 
 
     # -----------------------------------------------------
-    # COMBINED STRENGTH
+    # RMS / GENERAL ENERGY
     # -----------------------------------------------------
 
-    scores = (
-        0.55 * onset_scores
+    rms_curve = (
+        librosa.feature.rms(
+            y=y,
+            frame_length=1024,
+            hop_length=HOP_LENGTH
+        )[0]
+    )
+
+
+    rms_curve = normalize_feature(
+        rms_curve
+    )
+
+
+    # -----------------------------------------------------
+    # MATCH LENGTHS
+    # -----------------------------------------------------
+
+    target_length = len(
+        onset_curve
+    )
+
+
+    bass_curve = match_feature_length(
+        bass_curve,
+        target_length
+    )
+
+
+    rms_curve = match_feature_length(
+        rms_curve,
+        target_length
+    )
+
+
+    # -----------------------------------------------------
+    # COMBINED MUSIC-ACCENT CURVE
+    # -----------------------------------------------------
+
+    accent_curve = (
+
+        0.55
+        * onset_curve
+
         +
-        0.30 * bass_scores
+
+        0.30
+        * bass_curve
+
         +
-        0.15 * rms_scores
-    )
 
+        0.15
+        * rms_curve
 
-    # -----------------------------------------------------
-    # LOCAL PROMINENCE
-    #
-    # A beat gets a small bonus if it is stronger
-    # than the beats directly around it.
-    # -----------------------------------------------------
-
-    prominence = np.zeros_like(
-        scores
-    )
-
-    for i in range(
-        len(scores)
-    ):
-
-        neighbors = []
-
-        if i > 0:
-
-            neighbors.append(
-                scores[i - 1]
-            )
-
-        if i < len(scores) - 1:
-
-            neighbors.append(
-                scores[i + 1]
-            )
-
-        if neighbors:
-
-            neighbor_average = (
-                float(
-                    np.mean(
-                        neighbors
-                    )
-                )
-            )
-
-            prominence[i] = max(
-                0.0,
-                scores[i]
-                - neighbor_average
-            )
-
-
-    prominence = normalize_feature(
-        prominence
-    )
-
-
-    scores = (
-        0.85 * scores
-        +
-        0.15 * prominence
     )
 
 
     return normalize_feature(
-        scores
+        accent_curve
     )
 
 
-# ---------------------------------------------------------
-# STRONG BEAT SELECTION
-# ---------------------------------------------------------
-
-def choose_start_beat(
-    accent_scores,
-    interval
+def sample_curve_at_time(
+    curve,
+    time_seconds,
+    sr,
+    radius=1
 ):
 
     """
-    Choose a strong recurring starting beat.
-
-    We deliberately do NOT simply choose the first
-    detected beat.
-
-    The first note of a song may be a pickup,
-    intro note or isolated accent.
-
-    We look ahead and favor beats whose strength
-    repeats at approximately the requested interval.
+    Return the strongest musical-accent value
+    within a tiny window around a time position.
     """
 
-    beat_count = len(
-        accent_scores
-    )
-
-    if beat_count == 0:
-
-        return 0
-
-
-    search_length = min(
-        beat_count,
-        max(
-            6,
-            interval * 2 + 2
+    frame = int(
+        round(
+            time_seconds
+            * sr
+            / HOP_LENGTH
         )
     )
 
 
-    best_index = 0
-    best_score = -999.0
+    start = max(
+        0,
+        frame - radius
+    )
 
 
-    for candidate in range(
-        search_length
-    ):
-
-        repeated_values = (
-            accent_scores[
-                candidate
-                ::interval
-            ][:6]
-        )
+    end = min(
+        len(curve),
+        frame + radius + 1
+    )
 
 
-        if len(
-            repeated_values
-        ) > 1:
+    if end <= start:
 
-            recurring_median = float(
-                np.median(
-                    repeated_values
-                )
-            )
-
-            recurring_mean = float(
-                np.mean(
-                    repeated_values
-                )
-            )
-
-        else:
-
-            recurring_median = float(
-                accent_scores[
-                    candidate
-                ]
-            )
-
-            recurring_mean = (
-                recurring_median
-            )
+        return 0.0
 
 
-        candidate_score = (
-
-            0.25
-            * accent_scores[
-                candidate
+    return float(
+        np.max(
+            curve[
+                start:end
             ]
-
-            +
-
-            0.45
-            * recurring_median
-
-            +
-
-            0.30
-            * recurring_mean
-
-            -
-
-            # Small preference for not
-            # starting unnecessarily late.
-            0.025
-            * candidate
         )
+    )
 
 
-        if (
-            candidate_score
-            > best_score
-        ):
+# =========================================================
+# RHYTHM GRID
+# =========================================================
 
-            best_score = (
-                candidate_score
-            )
-
-            best_index = (
-                candidate
-            )
-
-
-    return best_index
-
-
-def select_strong_beat_indices(
-    accent_scores,
-    interval
+def get_median_beat_period(
+    beat_times
 ):
 
-    """
-    Select musically strong editing points while
-    keeping approximately regular spacing.
+    if len(
+        beat_times
+    ) < 2:
 
-    Every 2 beats:
-        normally gap = 2
-        can choose 1 or 3 if substantially stronger
+        return 0.5
 
-    Every 4 beats:
-        normally gap = 4
-        can choose 3 or 5 if substantially stronger
 
-    This allows DetectTheBeat to follow changes in
-    musical accent without becoming completely irregular.
-    """
-
-    beat_count = len(
-        accent_scores
+    differences = np.diff(
+        beat_times
     )
 
 
-    if beat_count == 0:
-
-        return []
-
-
-    # Every beat remains simple and predictable.
-    if interval == 1:
-
-        return list(
-            range(
-                beat_count
-            )
-        )
-
-
-    first_index = (
-        choose_start_beat(
-            accent_scores,
-            interval
-        )
-    )
-
-
-    selected = [
-        first_index
+    differences = differences[
+        differences > 0
     ]
 
 
-    current = (
-        first_index
+    if len(
+        differences
+    ) == 0:
+
+        return 0.5
+
+
+    return float(
+        np.median(
+            differences
+        )
     )
 
 
-    while True:
+def create_offset_candidates(
+    beat_period,
+    sr
+):
 
-        target = (
-            current
-            + interval
+    """
+    Search slightly more than half a beat in
+    either direction.
+
+    This lets us discover situations such as:
+
+    pickup note ---> real rhythmic hit
+
+    where the true editing pulse is between
+    Librosa's original beat positions.
+    """
+
+    analysis_step = (
+        HOP_LENGTH
+        / sr
+    )
+
+
+    maximum_shift = (
+        beat_period
+        * 0.55
+    )
+
+
+    offsets = np.arange(
+        -maximum_shift,
+        maximum_shift + analysis_step / 2,
+        analysis_step
+    )
+
+
+    # Make absolutely sure 0 is tested too.
+    offsets = np.append(
+        offsets,
+        0.0
+    )
+
+
+    offsets = np.unique(
+        np.round(
+            offsets,
+            6
         )
+    )
 
 
-        if target >= beat_count:
-
-            break
+    return offsets
 
 
-        minimum_gap = max(
-            1,
-            interval - 1
-        )
+# =========================================================
+# PHRASE SCORING
+# =========================================================
 
-        maximum_gap = (
-            interval + 1
-        )
+def get_phrase_selected_indices(
+    block_start,
+    block_end,
+    phase,
+    interval
+):
+
+    """
+    Return the beat indices that would become edit
+    points for one particular phase.
+
+    Example, Every 4:
+
+    phase 0:
+    x . . . x . . . x
+
+    phase 1:
+    . x . . . x . . .
+    """
+
+    selected = []
 
 
-        candidate_start = (
-            current
-            + minimum_gap
-        )
+    for beat_index in range(
+        block_start,
+        block_end
+    ):
 
-        candidate_end = min(
-            beat_count - 1,
-            current
-            + maximum_gap
+        local_index = (
+            beat_index
+            - block_start
         )
 
 
         if (
-            candidate_start
-            > candidate_end
+            local_index
+            % interval
+            ==
+            phase
         ):
 
-            break
-
-
-        best_candidate = None
-        best_value = -999.0
-
-
-        for candidate in range(
-            candidate_start,
-            candidate_end + 1
-        ):
-
-            gap = (
-                candidate
-                - current
+            selected.append(
+                beat_index
             )
-
-
-            strength = float(
-                accent_scores[
-                    candidate
-                ]
-            )
-
-
-            # -------------------------------------------------
-            # LOOK AHEAD
-            #
-            # A beat is more interesting if the same rough
-            # pulse continues to be strong afterwards.
-            # -------------------------------------------------
-
-            future_values = []
-
-            future_index = (
-                candidate
-            )
-
-            for _ in range(3):
-
-                if (
-                    future_index
-                    < beat_count
-                ):
-
-                    future_values.append(
-                        accent_scores[
-                            future_index
-                        ]
-                    )
-
-                future_index += (
-                    interval
-                )
-
-
-            if future_values:
-
-                future_strength = (
-                    float(
-                        np.mean(
-                            future_values
-                        )
-                    )
-                )
-
-            else:
-
-                future_strength = (
-                    strength
-                )
-
-
-            # -------------------------------------------------
-            # LOCAL PEAK BONUS
-            # -------------------------------------------------
-
-            local_start = max(
-                0,
-                candidate - 1
-            )
-
-            local_end = min(
-                beat_count,
-                candidate + 2
-            )
-
-
-            local_max = float(
-                np.max(
-                    accent_scores[
-                        local_start:
-                        local_end
-                    ]
-                )
-            )
-
-
-            if (
-                strength
-                >= local_max - 0.01
-            ):
-
-                local_peak_bonus = 0.08
-
-            else:
-
-                local_peak_bonus = 0.0
-
-
-            # -------------------------------------------------
-            # SPACING PENALTY
-            #
-            # A nearby stronger beat is allowed to win,
-            # but it has to be clearly better than the
-            # normally expected beat.
-            # -------------------------------------------------
-
-            distance_from_target = abs(
-                gap - interval
-            )
-
-
-            spacing_penalty = (
-                0.22
-                * distance_from_target
-            )
-
-
-            candidate_value = (
-
-                0.70
-                * strength
-
-                +
-
-                0.22
-                * future_strength
-
-                +
-
-                local_peak_bonus
-
-                -
-
-                spacing_penalty
-            )
-
-
-            if (
-                candidate_value
-                > best_value
-            ):
-
-                best_value = (
-                    candidate_value
-                )
-
-                best_candidate = (
-                    candidate
-                )
-
-
-        if best_candidate is None:
-
-            break
-
-
-        selected.append(
-            best_candidate
-        )
-
-
-        current = (
-            best_candidate
-        )
 
 
     return selected
 
 
-# ---------------------------------------------------------
+def score_phrase_state(
+    beat_times,
+    accent_curve,
+    sr,
+    block_start,
+    block_end,
+    interval,
+    phase,
+    offset,
+    ignore_first_beats=0
+):
+
+    """
+    Score one possible editing rhythm.
+
+    A good rhythm should not merely contain one huge hit.
+
+    It should contain beats that are repeatedly strong.
+
+    Median and lower-percentile strength therefore matter
+    more than a single maximum value.
+    """
+
+    selected_indices = (
+        get_phrase_selected_indices(
+            block_start,
+            block_end,
+            phase,
+            interval
+        )
+    )
+
+
+    strengths = []
+
+
+    for beat_index in selected_indices:
+
+        if (
+            beat_index
+            <
+            block_start
+            + ignore_first_beats
+        ):
+
+            continue
+
+
+        shifted_time = (
+            float(
+                beat_times[
+                    beat_index
+                ]
+            )
+            +
+            offset
+        )
+
+
+        if shifted_time < 0:
+
+            continue
+
+
+        strength = (
+            sample_curve_at_time(
+                accent_curve,
+                shifted_time,
+                sr,
+                radius=1
+            )
+        )
+
+
+        strengths.append(
+            strength
+        )
+
+
+    if len(
+        strengths
+    ) == 0:
+
+        return -999.0
+
+
+    strengths = np.asarray(
+        strengths
+    )
+
+
+    median_strength = float(
+        np.median(
+            strengths
+        )
+    )
+
+
+    mean_strength = float(
+        np.mean(
+            strengths
+        )
+    )
+
+
+    lower_strength = float(
+        np.percentile(
+            strengths,
+            25
+        )
+    )
+
+
+    # Consistency is more valuable than one huge transient.
+    score = (
+
+        0.50
+        * median_strength
+
+        +
+
+        0.25
+        * mean_strength
+
+        +
+
+        0.25
+        * lower_strength
+
+    )
+
+
+    # Tiny preference for staying close to Librosa's
+    # original grid if two alignments are nearly equal.
+    beat_period = get_median_beat_period(
+        beat_times
+    )
+
+
+    if beat_period > 0:
+
+        score -= (
+            0.025
+            * abs(offset)
+            / beat_period
+        )
+
+
+    return score
+
+
+def find_best_phrase_state(
+    beat_times,
+    accent_curve,
+    sr,
+    block_start,
+    block_end,
+    interval,
+    offset_candidates,
+    ignore_first_beats=0
+):
+
+    best_phase = 0
+    best_offset = 0.0
+    best_score = -999.0
+
+
+    for phase in range(
+        interval
+    ):
+
+
+        for offset in offset_candidates:
+
+
+            score = score_phrase_state(
+                beat_times=beat_times,
+                accent_curve=accent_curve,
+                sr=sr,
+                block_start=block_start,
+                block_end=block_end,
+                interval=interval,
+                phase=phase,
+                offset=float(offset),
+                ignore_first_beats=(
+                    ignore_first_beats
+                )
+            )
+
+
+            if score > best_score:
+
+                best_score = score
+                best_phase = phase
+                best_offset = float(
+                    offset
+                )
+
+
+    return (
+        best_phase,
+        best_offset,
+        best_score
+    )
+
+
+# =========================================================
+# PHRASE-LOCKED EDITING RHYTHM
+# =========================================================
+
+def select_phrase_locked_beats(
+    beat_times,
+    accent_curve,
+    sr,
+    interval
+):
+
+    """
+    New DetectTheBeat rhythm system.
+
+    1. Analyze the first phrase before deciding where
+       the song really "starts".
+
+    2. Ignore the first couple of beat detections while
+       SCORING the opening phrase so a pickup note cannot
+       dominate.
+
+    3. Once the best opening grid has been discovered,
+       apply it backwards to the beginning.
+
+    4. Keep one rhythm alignment locked for 16 beats.
+
+    5. Only change phase/grid in a later phrase when the
+       new alignment is clearly stronger.
+
+    This should address both:
+
+    - Ikoliks pickup problem
+    - Darklouds constantly-changing-phase problem
+    """
+
+    beat_count = len(
+        beat_times
+    )
+
+
+    if beat_count == 0:
+
+        return [], []
+
+
+    # Every beat remains exactly as Librosa detected it.
+    if interval == 1:
+
+        selected_times = [
+            float(x)
+            for x in beat_times
+        ]
+
+        return (
+            selected_times,
+            []
+        )
+
+
+    beat_period = (
+        get_median_beat_period(
+            beat_times
+        )
+    )
+
+
+    offset_candidates = (
+        create_offset_candidates(
+            beat_period,
+            sr
+        )
+    )
+
+
+    selected_records = []
+
+    phrase_states = []
+
+
+    previous_phase = None
+    previous_offset = None
+
+
+    block_number = 0
+
+
+    for block_start in range(
+        0,
+        beat_count,
+        PHRASE_BEATS
+    ):
+
+        block_end = min(
+            beat_count,
+            block_start
+            + PHRASE_BEATS
+        )
+
+
+        # -------------------------------------------------
+        # OPENING PHRASE
+        # -------------------------------------------------
+
+        if block_number == 0:
+
+            # Important:
+            #
+            # The first two detected beats do NOT influence
+            # our decision about the opening alignment.
+            #
+            # But once the alignment is found, we apply it
+            # back to the whole opening phrase.
+            #
+            # This is specifically intended to handle a
+            # pickup/anacrusis such as Ikoliks.
+            ignore_first_beats = min(
+                2,
+                max(
+                    0,
+                    block_end
+                    - block_start
+                    - 1
+                )
+            )
+
+
+            (
+                chosen_phase,
+                chosen_offset,
+                chosen_score
+            ) = find_best_phrase_state(
+                beat_times=beat_times,
+                accent_curve=accent_curve,
+                sr=sr,
+                block_start=block_start,
+                block_end=block_end,
+                interval=interval,
+                offset_candidates=(
+                    offset_candidates
+                ),
+                ignore_first_beats=(
+                    ignore_first_beats
+                )
+            )
+
+
+        # -------------------------------------------------
+        # LATER PHRASES
+        # -------------------------------------------------
+
+        else:
+
+            (
+                best_phase,
+                best_offset,
+                best_score
+            ) = find_best_phrase_state(
+                beat_times=beat_times,
+                accent_curve=accent_curve,
+                sr=sr,
+                block_start=block_start,
+                block_end=block_end,
+                interval=interval,
+                offset_candidates=(
+                    offset_candidates
+                ),
+                ignore_first_beats=0
+            )
+
+
+            # Score the alignment we are already using.
+            previous_score = (
+                score_phrase_state(
+                    beat_times=beat_times,
+                    accent_curve=accent_curve,
+                    sr=sr,
+                    block_start=block_start,
+                    block_end=block_end,
+                    interval=interval,
+                    phase=previous_phase,
+                    offset=previous_offset,
+                    ignore_first_beats=0
+                )
+            )
+
+
+            # Changing alignment has a cost.
+            # The larger the timing shift, the more evidence
+            # we require before changing.
+            offset_change = abs(
+                best_offset
+                - previous_offset
+            )
+
+
+            offset_change_penalty = (
+                0.05
+                * offset_change
+                / max(
+                    beat_period,
+                    0.001
+                )
+            )
+
+
+            phase_change_penalty = 0.0
+
+
+            if (
+                best_phase
+                != previous_phase
+            ):
+
+                phase_change_penalty = 0.04
+
+
+            required_improvement = (
+
+                SWITCH_MARGIN
+
+                +
+
+                offset_change_penalty
+
+                +
+
+                phase_change_penalty
+
+            )
+
+
+            if (
+                best_score
+                >
+                previous_score
+                +
+                required_improvement
+            ):
+
+                chosen_phase = (
+                    best_phase
+                )
+
+                chosen_offset = (
+                    best_offset
+                )
+
+                chosen_score = (
+                    best_score
+                )
+
+
+            else:
+
+                chosen_phase = (
+                    previous_phase
+                )
+
+                chosen_offset = (
+                    previous_offset
+                )
+
+                chosen_score = (
+                    previous_score
+                )
+
+
+        # -------------------------------------------------
+        # CREATE CUTS FOR THIS PHRASE
+        # -------------------------------------------------
+
+        phrase_indices = (
+            get_phrase_selected_indices(
+                block_start,
+                block_end,
+                chosen_phase,
+                interval
+            )
+        )
+
+
+        for beat_index in phrase_indices:
+
+
+            shifted_time = (
+                float(
+                    beat_times[
+                        beat_index
+                    ]
+                )
+                +
+                chosen_offset
+            )
+
+
+            if shifted_time <= 0:
+
+                continue
+
+
+            strength = (
+                sample_curve_at_time(
+                    accent_curve,
+                    shifted_time,
+                    sr,
+                    radius=1
+                )
+            )
+
+
+            selected_records.append(
+                {
+                    "time": shifted_time,
+                    "strength": strength,
+                    "beat_index": beat_index,
+                    "block": block_number
+                }
+            )
+
+
+        phrase_states.append(
+            {
+                "block": block_number,
+                "start_beat": block_start,
+                "end_beat": block_end,
+                "phase": chosen_phase,
+                "offset": chosen_offset,
+                "score": chosen_score
+            }
+        )
+
+
+        previous_phase = (
+            chosen_phase
+        )
+
+
+        previous_offset = (
+            chosen_offset
+        )
+
+
+        block_number += 1
+
+
+    # =====================================================
+    # CLEAN UP PHRASE BOUNDARIES
+    # =====================================================
+
+    selected_records = sorted(
+        selected_records,
+        key=lambda item: item["time"]
+    )
+
+
+    if len(
+        selected_records
+    ) == 0:
+
+        return [], phrase_states
+
+
+    target_gap = (
+        beat_period
+        * interval
+    )
+
+
+    minimum_gap = (
+        target_gap
+        * 0.55
+    )
+
+
+    cleaned = []
+
+
+    for record in selected_records:
+
+
+        if not cleaned:
+
+            cleaned.append(
+                record
+            )
+
+            continue
+
+
+        previous = cleaned[-1]
+
+
+        gap = (
+            record["time"]
+            -
+            previous["time"]
+        )
+
+
+        # If a phrase change accidentally creates two cuts
+        # extremely close together, keep only the stronger one.
+        if gap < minimum_gap:
+
+            if (
+                record["strength"]
+                >
+                previous["strength"]
+            ):
+
+                cleaned[-1] = (
+                    record
+                )
+
+
+        else:
+
+            cleaned.append(
+                record
+            )
+
+
+    selected_times = [
+        item["time"]
+        for item in cleaned
+    ]
+
+
+    return (
+        selected_times,
+        phrase_states
+    )
+
+
+# =========================================================
 # USER INTERFACE
-# ---------------------------------------------------------
+# =========================================================
 
 uploaded_file = st.file_uploader(
     "Upload audio",
@@ -985,7 +1368,7 @@ beat_choice = st.radio(
         "Every 4 beats"
     ],
 
-    # Every 4 beats is now default
+    # Every 4 beats is default.
     index=2
 )
 
@@ -1011,11 +1394,12 @@ BEAT_INTERVAL = (
 )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # GENERATION
-# ---------------------------------------------------------
+# =========================================================
 
 if uploaded_file is not None:
+
 
     st.audio(
         uploaded_file
@@ -1035,10 +1419,12 @@ if uploaded_file is not None:
         type="primary"
     ):
 
+
         status = None
 
 
         try:
+
 
             status = st.status(
                 "Preparing audio...",
@@ -1048,14 +1434,15 @@ if uploaded_file is not None:
 
             with tempfile.TemporaryDirectory() as work_dir:
 
+
                 work_dir = Path(
                     work_dir
                 )
 
 
-                # ---------------------------------------------
+                # =================================================
                 # STEP 1
-                # ---------------------------------------------
+                # =================================================
 
                 status.write(
                     "1/5 · Checking audio"
@@ -1078,7 +1465,8 @@ if uploaded_file is not None:
 
                 audio_path = (
                     work_dir
-                    / f"input{extension}"
+                    /
+                    f"input{extension}"
                 )
 
 
@@ -1086,6 +1474,7 @@ if uploaded_file is not None:
                     audio_path,
                     "wb"
                 ) as file:
+
 
                     file.write(
                         uploaded_file.getvalue()
@@ -1103,8 +1492,10 @@ if uploaded_file is not None:
 
                 if (
                     total_duration
-                    > MAX_AUDIO_DURATION
+                    >
+                    MAX_AUDIO_DURATION
                 ):
+
 
                     status.update(
                         label="Audio is too long",
@@ -1122,12 +1513,16 @@ if uploaded_file is not None:
 
 
                 minutes = int(
-                    total_duration // 60
+                    total_duration
+                    //
+                    60
                 )
 
 
                 seconds = int(
-                    total_duration % 60
+                    total_duration
+                    %
+                    60
                 )
 
 
@@ -1138,9 +1533,9 @@ if uploaded_file is not None:
                 )
 
 
-                # ---------------------------------------------
+                # =================================================
                 # STEP 2
-                # ---------------------------------------------
+                # =================================================
 
                 status.write(
                     "2/5 · Preparing audio "
@@ -1150,35 +1545,45 @@ if uploaded_file is not None:
 
                 analysis_path = (
                     work_dir
-                    / "analysis.wav"
+                    /
+                    "analysis.wav"
                 )
 
 
                 run_command([
                     FFMPEG_EXE,
+
                     "-y",
+
                     "-loglevel",
                     "error",
+
                     "-i",
-                    str(audio_path),
+                    str(
+                        audio_path
+                    ),
+
                     "-vn",
+
                     "-ac",
                     "1",
+
                     "-ar",
                     "22050",
+
                     str(
                         analysis_path
                     )
                 ])
 
 
-                # ---------------------------------------------
+                # =================================================
                 # STEP 3
-                # ---------------------------------------------
+                # =================================================
 
                 status.write(
-                    "3/5 · Detecting beats "
-                    "and musical accents"
+                    "3/5 · Detecting rhythm "
+                    "and strong musical accents"
                 )
 
 
@@ -1230,7 +1635,8 @@ if uploaded_file is not None:
                     len(
                         beat_times
                     )
-                    == 0
+                    ==
+                    0
                 ):
 
                     raise RuntimeError(
@@ -1239,13 +1645,10 @@ if uploaded_file is not None:
                     )
 
 
-                accent_scores = (
-                    get_beat_accent_scores(
+                accent_curve = (
+                    build_accent_curve(
                         y=y,
                         sr=sr,
-                        beat_frames=(
-                            beat_frames
-                        ),
                         onset_envelope=(
                             onset_envelope
                         )
@@ -1253,24 +1656,29 @@ if uploaded_file is not None:
                 )
 
 
-                selected_indices = (
-                    select_strong_beat_indices(
-                        accent_scores,
-                        BEAT_INTERVAL
+                (
+                    selected_beats,
+                    phrase_states
+                ) = (
+                    select_phrase_locked_beats(
+                        beat_times=(
+                            beat_times
+                        ),
+                        accent_curve=(
+                            accent_curve
+                        ),
+                        sr=sr,
+                        interval=(
+                            BEAT_INTERVAL
+                        )
                     )
-                )
-
-
-                selected_beats = (
-                    beat_times[
-                        selected_indices
-                    ]
                 )
 
 
                 status.write(
                     f"Detected "
-                    f"{len(beat_times)} beats"
+                    f"{len(beat_times)} "
+                    f"base beats"
                 )
 
 
@@ -1282,29 +1690,115 @@ if uploaded_file is not None:
                         "Using every detected beat"
                     )
 
+
                 else:
 
                     status.write(
                         f"Selected "
                         f"{len(selected_beats)} "
-                        f"strong recurring "
+                        f"phrase-locked "
                         f"edit points"
                     )
 
 
+                    if len(
+                        phrase_states
+                    ) > 0:
+
+                        initial_offset = (
+                            phrase_states[
+                                0
+                            ]["offset"]
+                        )
+
+
+                        offset_ms = int(
+                            round(
+                                initial_offset
+                                *
+                                1000
+                            )
+                        )
+
+
+                        status.write(
+                            f"Opening rhythm alignment: "
+                            f"{offset_ms:+d} ms"
+                        )
+
+
+                        number_of_changes = 0
+
+
+                        for state_index in range(
+                            1,
+                            len(
+                                phrase_states
+                            )
+                        ):
+
+
+                            current_state = (
+                                phrase_states[
+                                    state_index
+                                ]
+                            )
+
+
+                            previous_state = (
+                                phrase_states[
+                                    state_index
+                                    -
+                                    1
+                                ]
+                            )
+
+
+                            if (
+                                current_state[
+                                    "phase"
+                                ]
+                                !=
+                                previous_state[
+                                    "phase"
+                                ]
+                                or
+                                abs(
+                                    current_state[
+                                        "offset"
+                                    ]
+                                    -
+                                    previous_state[
+                                        "offset"
+                                    ]
+                                )
+                                >
+                                0.01
+                            ):
+
+                                number_of_changes += 1
+
+
+                        status.write(
+                            f"Rhythm alignment changes: "
+                            f"{number_of_changes}"
+                        )
+
+
                 del y
                 del onset_envelope
-                del accent_scores
+                del accent_curve
 
 
-                # ---------------------------------------------
+                # =================================================
                 # FRAME CONVERSION
-                # ---------------------------------------------
+                # =================================================
 
                 total_video_frames = (
                     math.ceil(
                         total_duration
-                        * FPS_VALUE
+                        *
+                        FPS_VALUE
                     )
                 )
 
@@ -1313,6 +1807,7 @@ if uploaded_file is not None:
 
 
                 for beat in selected_beats:
+
 
                     frame_number = (
                         beat_time_to_frame(
@@ -1328,7 +1823,8 @@ if uploaded_file is not None:
                         frame_number > 0
                         and
                         frame_number
-                        < total_video_frames
+                        <
+                        total_video_frames
                     ):
 
                         scene_change_frames.append(
@@ -1350,9 +1846,9 @@ if uploaded_file is not None:
                 )
 
 
-                # ---------------------------------------------
+                # =================================================
                 # STEP 4
-                # ---------------------------------------------
+                # =================================================
 
                 status.write(
                     "4/5 · Building "
@@ -1362,7 +1858,8 @@ if uploaded_file is not None:
 
                 raw_video_path = (
                     work_dir
-                    / "reference.rgb"
+                    /
+                    "reference.rgb"
                 )
 
 
@@ -1383,21 +1880,25 @@ if uploaded_file is not None:
 
                         while (
                             change_index
-                            < len(
+                            <
+                            len(
                                 scene_change_frames
                             )
                             and
                             frame_number
-                            >= scene_change_frames[
+                            >=
+                            scene_change_frames[
                                 change_index
                             ]
                         ):
+
 
                             pattern_index += 1
                             change_index += 1
 
 
                         if pattern_index < 0:
+
 
                             frame_data = (
                                 BLACK_FRAME
@@ -1406,9 +1907,12 @@ if uploaded_file is not None:
 
                         elif (
                             pattern_index
-                            % 2
-                            == 0
+                            %
+                            2
+                            ==
+                            0
                         ):
+
 
                             frame_data = (
                                 PATTERN_A_FRAME
@@ -1416,6 +1920,7 @@ if uploaded_file is not None:
 
 
                         else:
+
 
                             frame_data = (
                                 PATTERN_B_FRAME
@@ -1427,9 +1932,9 @@ if uploaded_file is not None:
                         )
 
 
-                # ---------------------------------------------
+                # =================================================
                 # STEP 5
-                # ---------------------------------------------
+                # =================================================
 
                 status.write(
                     "5/5 · Rendering video"
@@ -1438,12 +1943,14 @@ if uploaded_file is not None:
 
                 output_path = (
                     work_dir
-                    / "detectthebeat_video.mp4"
+                    /
+                    "detectthebeat_video.mp4"
                 )
 
 
                 run_command([
                     FFMPEG_EXE,
+
                     "-y",
 
                     "-loglevel",
@@ -1457,7 +1964,8 @@ if uploaded_file is not None:
 
                     "-s:v",
                     (
-                        f"{INTERNAL_WIDTH}x"
+                        f"{INTERNAL_WIDTH}"
+                        f"x"
                         f"{INTERNAL_HEIGHT}"
                     ),
 
@@ -1520,9 +2028,9 @@ if uploaded_file is not None:
                 )
 
 
-            # ---------------------------------------------
+            # =================================================
             # FINISHED
-            # ---------------------------------------------
+            # =================================================
 
             status.update(
                 label="Video ready!",
@@ -1564,9 +2072,12 @@ if uploaded_file is not None:
 
         except Exception as error:
 
+
             if status is not None:
 
+
                 try:
+
 
                     status.update(
                         label=(
@@ -1574,6 +2085,7 @@ if uploaded_file is not None:
                         ),
                         state="error"
                     )
+
 
                 except Exception:
 
@@ -1586,5 +2098,7 @@ if uploaded_file is not None:
 
 
             st.code(
-                str(error)
+                str(
+                    error
+                )
             )
