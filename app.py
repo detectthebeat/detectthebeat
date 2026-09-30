@@ -7,7 +7,6 @@ import re
 import numpy as np
 import pandas as pd
 import imageio_ffmpeg
-
 from pathlib import Path
 
 
@@ -21,14 +20,11 @@ FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 st.set_page_config(
     page_title="DetectTheBeat",
     page_icon="🎵",
-    layout="centered"
+    layout="centered",
 )
 
 st.title("🎵 DetectTheBeat")
-
-st.write(
-    "Turn music into useful editing information."
-)
+st.write("Turn music into useful editing information.")
 
 
 # =========================================================
@@ -36,31 +32,18 @@ st.write(
 # =========================================================
 
 MAX_AUDIO_DURATION = 6 * 60
-
 VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
-
 INTERNAL_WIDTH = 64
 INTERNAL_HEIGHT = 36
-
 HOP_LENGTH = 512
-
 PHRASE_BEATS = 16
 SWITCH_MARGIN = 0.10
 
-
 FPS_OPTIONS = {
-    "25 fps": {
-        "value": 25.0,
-        "ffmpeg": "25"
-    },
-
-    "23.976 fps": {
-        "value": 24000 / 1001,
-        "ffmpeg": "24000/1001"
-    },
+    "25 fps": {"value": 25.0, "ffmpeg": "25"},
+    "23.976 fps": {"value": 24000 / 1001, "ffmpeg": "24000/1001"},
 }
-
 
 BEAT_INTERVALS = {
     "Every beat": 1,
@@ -74,28 +57,23 @@ BEAT_INTERVALS = {
 # =========================================================
 
 def run_command(command, cwd=None):
-
     result = subprocess.run(
         command,
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
     )
 
     if result.returncode != 0:
-
-        error_text = result.stderr[-5000:]
-
         raise RuntimeError(
-            f"FFmpeg error:\n{error_text}"
+            f"FFmpeg error:\n{result.stderr[-5000:]}"
         )
 
     return result
 
 
 def get_audio_duration(audio_path):
-
     return float(
         librosa.get_duration(
             path=audio_path
@@ -103,56 +81,28 @@ def get_audio_duration(audio_path):
     )
 
 
-def beat_time_to_frame(
-    time_seconds,
-    fps
-):
-
-    return round(
-        time_seconds * fps
-    )
+def beat_time_to_frame(time_seconds, fps):
+    return round(time_seconds * fps)
 
 
 def format_time(seconds):
+    minutes = int(seconds // 60)
+    remaining = seconds - minutes * 60
 
-    minutes = int(
-        seconds // 60
-    )
-
-    remaining = (
-        seconds
-        -
-        minutes * 60
-    )
-
-    return (
-        f"{minutes}:"
-        f"{remaining:05.2f}"
-    )
+    return f"{minutes}:{remaining:05.2f}"
 
 
-# =========================================================
-# AUDIO PREPARATION
-# =========================================================
-
-def save_uploaded_audio(
-    uploaded_file,
-    work_dir
-):
-
+def save_uploaded_audio(uploaded_file, work_dir):
     extension = Path(
         uploaded_file.name
     ).suffix.lower()
-
 
     if extension not in [
         ".mp3",
         ".wav",
         ".m4a"
     ]:
-
         extension = ".mp3"
-
 
     audio_path = (
         work_dir
@@ -160,16 +110,13 @@ def save_uploaded_audio(
         f"input{extension}"
     )
 
-
     with open(
         audio_path,
         "wb"
     ) as file:
-
         file.write(
             uploaded_file.getvalue()
         )
-
 
     return audio_path
 
@@ -178,40 +125,26 @@ def create_analysis_wav(
     audio_path,
     work_dir
 ):
-
     analysis_path = (
         work_dir
         /
         "analysis.wav"
     )
 
-
     run_command([
         FFMPEG_EXE,
-
         "-y",
-
         "-loglevel",
         "error",
-
         "-i",
-        str(
-            audio_path
-        ),
-
+        str(audio_path),
         "-vn",
-
         "-ac",
         "1",
-
         "-ar",
         "22050",
-
-        str(
-            analysis_path
-        )
+        str(analysis_path),
     ])
-
 
     return analysis_path
 
@@ -224,37 +157,24 @@ def make_output_filename(
     original_name,
     beat_choice
 ):
-
     song_name = Path(
         original_name
     ).stem
 
-
     song_name = re.sub(
         r'[<>:"/\\|?*]',
-        '',
+        "",
         song_name
     ).strip()
 
-
     if not song_name:
-
         song_name = "Song"
 
-
     beat_labels = {
-
-        "Every beat":
-        "EveryBeat",
-
-        "Every 2 beats":
-        "Every2Beats",
-
-        "Every 4 beats":
-        "Every4Beats",
-
+        "Every beat": "EveryBeat",
+        "Every 2 beats": "Every2Beats",
+        "Every 4 beats": "Every4Beats",
     }
-
 
     return (
         f"{song_name}_"
@@ -272,13 +192,7 @@ def create_solid_frame(
     height,
     color
 ):
-
-    pixel = bytes(
-        color
-    )
-
-
-    return pixel * (
+    return bytes(color) * (
         width * height
     )
 
@@ -288,101 +202,57 @@ def create_checkerboard_frame(
     height,
     inverted=False
 ):
-
     block_size = 4
-
     pixels = bytearray()
 
-
-    for y in range(
-        height
-    ):
-
-        for x in range(
-            width
-        ):
-
+    for y in range(height):
+        for x in range(width):
 
             checker = (
                 (
-                    x
-                    //
-                    block_size
+                    x // block_size
                 )
-
                 +
-
                 (
-                    y
-                    //
-                    block_size
+                    y // block_size
                 )
-
             ) % 2
 
-
             if inverted:
-
-                checker = (
-                    1
-                    -
-                    checker
-                )
-
+                checker = 1 - checker
 
             if checker == 0:
-
                 pixels.extend(
-                    (
-                        0,
-                        0,
-                        0
-                    )
+                    (0, 0, 0)
                 )
 
             else:
-
                 pixels.extend(
-                    (
-                        255,
-                        255,
-                        255
-                    )
+                    (255, 255, 255)
                 )
 
-
-    return bytes(
-        pixels
-    )
+    return bytes(pixels)
 
 
-BLACK_FRAME = (
-    create_solid_frame(
-        INTERNAL_WIDTH,
-        INTERNAL_HEIGHT,
-        (
-            0,
-            0,
-            0
-        )
-    )
+BLACK_FRAME = create_solid_frame(
+    INTERNAL_WIDTH,
+    INTERNAL_HEIGHT,
+    (0, 0, 0),
 )
-
 
 PATTERN_A_FRAME = (
     create_checkerboard_frame(
         INTERNAL_WIDTH,
         INTERNAL_HEIGHT,
-        inverted=False
+        inverted=False,
     )
 )
-
 
 PATTERN_B_FRAME = (
     create_checkerboard_frame(
         INTERNAL_WIDTH,
         INTERNAL_HEIGHT,
-        inverted=True
+        inverted=True,
     )
 )
 
@@ -391,56 +261,35 @@ PATTERN_B_FRAME = (
 # FEATURE HELPERS
 # =========================================================
 
-def normalize_feature(
-    values
-):
-
+def normalize_feature(values):
     values = np.asarray(
         values,
         dtype=float
     )
 
-
-    if len(
-        values
-    ) == 0:
-
+    if len(values) == 0:
         return values
-
 
     low = np.percentile(
         values,
         10
     )
 
-
     high = np.percentile(
         values,
         90
     )
 
-
     if high <= low:
-
         return np.zeros_like(
             values
         )
 
-
     normalized = (
-
-        values
-        -
-        low
-
+        values - low
     ) / (
-
-        high
-        -
-        low
-
+        high - low
     )
-
 
     return np.clip(
         normalized,
@@ -453,59 +302,33 @@ def match_feature_length(
     values,
     target_length
 ):
-
     values = np.asarray(
         values,
         dtype=float
     )
 
-
-    if len(
-        values
-    ) == target_length:
-
+    if len(values) == target_length:
         return values
 
-
-    if len(
-        values
-    ) > target_length:
-
+    if len(values) > target_length:
         return values[
             :target_length
         ]
 
-
-    if len(
-        values
-    ) == 0:
-
+    if len(values) == 0:
         return np.zeros(
             target_length
         )
 
-
     padding = np.full(
-
-        target_length
-        -
-        len(
-            values
-        ),
-
-        values[
-            -1
-        ]
-
+        target_length - len(values),
+        values[-1]
     )
 
-
-    return np.concatenate(
-        [
-            values,
-            padding
-        ]
-    )
+    return np.concatenate([
+        values,
+        padding
+    ])
 
 
 def sample_curve_at_time(
@@ -514,47 +337,28 @@ def sample_curve_at_time(
     sr,
     radius=1
 ):
-
     frame = int(
         round(
-
             time_seconds
             *
             sr
             /
             HOP_LENGTH
-
         )
     )
 
-
     start = max(
         0,
-        frame
-        -
-        radius
+        frame - radius
     )
-
 
     end = min(
-
-        len(
-            curve
-        ),
-
-        frame
-        +
-        radius
-        +
-        1
-
+        len(curve),
+        frame + radius + 1
     )
 
-
     if end <= start:
-
         return 0.0
-
 
     return float(
         np.max(
@@ -569,29 +373,19 @@ def moving_average(
     values,
     window
 ):
-
     values = np.asarray(
         values,
         dtype=float
     )
 
-
     if window <= 1:
-
         return values.copy()
 
-
     kernel = (
-
-        np.ones(
-            window
-        )
-
+        np.ones(window)
         /
         window
-
     )
-
 
     return np.convolve(
         values,
@@ -604,32 +398,18 @@ def rising_trend(
     values,
     window_frames
 ):
-
-    """
-    Estimate whether a signal has been rising.
-
-    Positive values mean the recent part of the window
-    is stronger than the earlier part.
-    """
-
     values = np.asarray(
         values,
         dtype=float
     )
 
-
-    if len(
-        values
-    ) == 0:
-
+    if len(values) == 0:
         return values
-
 
     half = max(
         2,
         window_frames // 2
     )
-
 
     smoothed = moving_average(
         values,
@@ -639,18 +419,15 @@ def rising_trend(
         )
     )
 
-
     recent = moving_average(
         smoothed,
         half
     )
 
-
     previous = np.roll(
         recent,
         half
     )
-
 
     trend = (
         recent
@@ -658,17 +435,14 @@ def rising_trend(
         previous
     )
 
-
     trend[
         :half
     ] = 0
-
 
     trend = np.maximum(
         trend,
         0
     )
-
 
     return normalize_feature(
         trend
@@ -684,45 +458,28 @@ def build_accent_curve(
     sr,
     onset_envelope
 ):
-
     onset_curve = normalize_feature(
         onset_envelope
     )
 
-
     mel = librosa.feature.melspectrogram(
-
         y=y,
-
         sr=sr,
-
         n_fft=1024,
-
         hop_length=HOP_LENGTH,
-
         n_mels=32,
-
         fmin=30,
-
         fmax=1000,
-
-        power=1.0
-
+        power=1.0,
     )
-
 
     mel_frequencies = (
         librosa.mel_frequencies(
-
             n_mels=32,
-
             fmin=30,
-
-            fmax=1000
-
+            fmax=1000,
         )
     )
-
 
     bass_mask = (
         mel_frequencies
@@ -730,61 +487,43 @@ def build_accent_curve(
         180
     )
 
-
     if np.any(
         bass_mask
     ):
-
         bass_curve = np.mean(
-
             mel[
                 bass_mask,
                 :
             ],
-
             axis=0
-
         )
 
     else:
-
         bass_curve = np.zeros(
-            mel.shape[
-                1
-            ]
+            mel.shape[1]
         )
 
-
     del mel
-
 
     bass_curve = normalize_feature(
         bass_curve
     )
 
-
     rms_curve = (
         librosa.feature.rms(
-
             y=y,
-
             frame_length=1024,
-
-            hop_length=HOP_LENGTH
-
+            hop_length=HOP_LENGTH,
         )[0]
     )
-
 
     rms_curve = normalize_feature(
         rms_curve
     )
 
-
     target_length = len(
         onset_curve
     )
-
 
     bass_curve = (
         match_feature_length(
@@ -793,7 +532,6 @@ def build_accent_curve(
         )
     )
 
-
     rms_curve = (
         match_feature_length(
             rms_curve,
@@ -801,9 +539,7 @@ def build_accent_curve(
         )
     )
 
-
     accent_curve = (
-
         0.55
         *
         onset_curve
@@ -819,9 +555,7 @@ def build_accent_curve(
         0.15
         *
         rms_curve
-
     )
-
 
     return normalize_feature(
         accent_curve
@@ -831,34 +565,25 @@ def build_accent_curve(
 def get_median_beat_period(
     beat_times
 ):
-
     if len(
         beat_times
     ) < 2:
-
         return 0.5
-
 
     differences = np.diff(
         beat_times
     )
 
-
     differences = (
         differences[
-            differences
-            >
-            0
+            differences > 0
         ]
     )
-
 
     if len(
         differences
     ) == 0:
-
         return 0.5
-
 
     return float(
         np.median(
@@ -871,13 +596,11 @@ def create_offset_candidates(
     beat_period,
     sr
 ):
-
     analysis_step = (
         HOP_LENGTH
         /
         sr
     )
-
 
     maximum_shift = (
         beat_period
@@ -885,37 +608,25 @@ def create_offset_candidates(
         0.55
     )
 
-
     offsets = np.arange(
-
         -maximum_shift,
-
         maximum_shift
         +
-        analysis_step
-        /
-        2,
-
-        analysis_step
-
+        analysis_step / 2,
+        analysis_step,
     )
-
 
     offsets = np.append(
         offsets,
         0.0
     )
 
-
-    offsets = np.unique(
+    return np.unique(
         np.round(
             offsets,
             6
         )
     )
-
-
-    return offsets
 
 
 def get_phrase_selected_indices(
@@ -924,22 +635,18 @@ def get_phrase_selected_indices(
     phase,
     interval
 ):
-
     selected = []
-
 
     for beat_index in range(
         block_start,
         block_end
     ):
 
-
         local_index = (
             beat_index
             -
             block_start
         )
-
 
         if (
             local_index
@@ -948,11 +655,9 @@ def get_phrase_selected_indices(
             ==
             phase
         ):
-
             selected.append(
                 beat_index
             )
-
 
     return selected
 
@@ -966,28 +671,22 @@ def score_phrase_state(
     interval,
     phase,
     offset,
-    ignore_first_beats=0
+    ignore_first_beats=0,
 ):
-
     selected_indices = (
         get_phrase_selected_indices(
-
             block_start,
             block_end,
             phase,
-            interval
-
+            interval,
         )
     )
 
-
     strengths = []
-
 
     for beat_index in (
         selected_indices
     ):
-
 
         if (
             beat_index
@@ -996,61 +695,42 @@ def score_phrase_state(
             +
             ignore_first_beats
         ):
-
             continue
 
-
         shifted_time = (
-
             float(
                 beat_times[
                     beat_index
                 ]
             )
-
             +
-
             offset
-
         )
 
-
         if shifted_time < 0:
-
             continue
-
 
         strength = (
             sample_curve_at_time(
-
                 accent_curve,
-
                 shifted_time,
-
                 sr,
-
-                radius=1
-
+                radius=1,
             )
         )
-
 
         strengths.append(
             strength
         )
 
-
     if len(
         strengths
     ) == 0:
-
         return -999.0
-
 
     strengths = np.asarray(
         strengths
     )
-
 
     median_strength = float(
         np.median(
@@ -1058,13 +738,11 @@ def score_phrase_state(
         )
     )
 
-
     mean_strength = float(
         np.mean(
             strengths
         )
     )
-
 
     lower_strength = float(
         np.percentile(
@@ -1073,9 +751,7 @@ def score_phrase_state(
         )
     )
 
-
     score = (
-
         0.50
         *
         median_strength
@@ -1091,9 +767,7 @@ def score_phrase_state(
         0.25
         *
         lower_strength
-
     )
-
 
     beat_period = (
         get_median_beat_period(
@@ -1101,23 +775,16 @@ def score_phrase_state(
         )
     )
 
-
     if beat_period > 0:
-
         score -= (
-
             0.025
-
             *
             abs(
                 offset
             )
-
             /
             beat_period
-
         )
-
 
     return score
 
@@ -1130,63 +797,44 @@ def find_best_phrase_state(
     block_end,
     interval,
     offset_candidates,
-    ignore_first_beats=0
+    ignore_first_beats=0,
 ):
-
     best_phase = 0
-
     best_offset = 0.0
-
     best_score = -999.0
-
 
     for phase in range(
         interval
     ):
 
-
         for offset in (
             offset_candidates
         ):
 
-
-            score = score_phrase_state(
-
-                beat_times=beat_times,
-
-                accent_curve=accent_curve,
-
-                sr=sr,
-
-                block_start=block_start,
-
-                block_end=block_end,
-
-                interval=interval,
-
-                phase=phase,
-
-                offset=float(
-                    offset
-                ),
-
-                ignore_first_beats=(
-                    ignore_first_beats
+            score = (
+                score_phrase_state(
+                    beat_times=beat_times,
+                    accent_curve=accent_curve,
+                    sr=sr,
+                    block_start=block_start,
+                    block_end=block_end,
+                    interval=interval,
+                    phase=phase,
+                    offset=float(
+                        offset
+                    ),
+                    ignore_first_beats=(
+                        ignore_first_beats
+                    ),
                 )
-
             )
 
-
             if score > best_score:
-
                 best_score = score
-
                 best_phase = phase
-
                 best_offset = float(
                     offset
                 )
-
 
     return (
         best_phase,
@@ -1201,33 +849,22 @@ def select_phrase_locked_beats(
     sr,
     interval
 ):
-
     beat_count = len(
         beat_times
     )
 
-
     if beat_count == 0:
-
         return [], []
 
-
     if interval == 1:
-
-        selected_times = [
-            float(
-                x
-            )
-            for x
-            in beat_times
-        ]
-
-
         return (
-            selected_times,
-            []
+            [
+                float(x)
+                for x
+                in beat_times
+            ],
+            [],
         )
-
 
     beat_period = (
         get_median_beat_period(
@@ -1235,238 +872,147 @@ def select_phrase_locked_beats(
         )
     )
 
-
     offset_candidates = (
         create_offset_candidates(
-
             beat_period,
-
             sr
-
         )
     )
 
-
     selected_records = []
-
     phrase_states = []
 
-
     previous_phase = None
-
     previous_offset = None
 
     block_number = 0
 
-
     for block_start in range(
-
         0,
-
         beat_count,
-
         PHRASE_BEATS
-
     ):
 
-
         block_end = min(
-
             beat_count,
-
             block_start
             +
             PHRASE_BEATS
-
         )
-
-
-        # -------------------------------------------------
-        # OPENING PHRASE
-        # -------------------------------------------------
 
         if block_number == 0:
 
-
             ignore_first_beats = min(
-
                 2,
-
                 max(
-
                     0,
-
                     block_end
                     -
                     block_start
                     -
                     1
-
-                )
-
+                ),
             )
-
 
             (
                 chosen_phase,
                 chosen_offset,
-                chosen_score
-
+                chosen_score,
             ) = (
                 find_best_phrase_state(
-
                     beat_times=beat_times,
-
                     accent_curve=accent_curve,
-
                     sr=sr,
-
                     block_start=block_start,
-
                     block_end=block_end,
-
                     interval=interval,
-
                     offset_candidates=(
                         offset_candidates
                     ),
-
                     ignore_first_beats=(
                         ignore_first_beats
-                    )
-
+                    ),
                 )
             )
 
-
-        # -------------------------------------------------
-        # LATER PHRASES
-        # -------------------------------------------------
-
         else:
-
 
             (
                 best_phase,
                 best_offset,
-                best_score
-
+                best_score,
             ) = (
                 find_best_phrase_state(
-
                     beat_times=beat_times,
-
                     accent_curve=accent_curve,
-
                     sr=sr,
-
                     block_start=block_start,
-
                     block_end=block_end,
-
                     interval=interval,
-
                     offset_candidates=(
                         offset_candidates
                     ),
-
-                    ignore_first_beats=0
-
+                    ignore_first_beats=0,
                 )
             )
-
 
             previous_score = (
                 score_phrase_state(
-
                     beat_times=beat_times,
-
                     accent_curve=accent_curve,
-
                     sr=sr,
-
                     block_start=block_start,
-
                     block_end=block_end,
-
                     interval=interval,
-
                     phase=previous_phase,
-
                     offset=previous_offset,
-
-                    ignore_first_beats=0
-
+                    ignore_first_beats=0,
                 )
             )
 
-
             offset_change = abs(
-
                 best_offset
                 -
                 previous_offset
-
             )
 
-
             offset_change_penalty = (
-
                 0.05
-
                 *
                 offset_change
-
                 /
                 max(
                     beat_period,
                     0.001
                 )
-
             )
 
-
             phase_change_penalty = 0.0
-
 
             if (
                 best_phase
                 !=
                 previous_phase
             ):
-
                 phase_change_penalty = (
                     0.04
                 )
 
-
             required_improvement = (
-
                 SWITCH_MARGIN
-
                 +
-
                 offset_change_penalty
-
                 +
-
                 phase_change_penalty
-
             )
 
-
             if (
-
                 best_score
-
                 >
-
                 previous_score
                 +
                 required_improvement
-
             ):
-
 
                 chosen_phase = (
                     best_phase
@@ -1480,9 +1026,7 @@ def select_phrase_locked_beats(
                     best_score
                 )
 
-
             else:
-
 
                 chosen_phase = (
                     previous_phase
@@ -1496,102 +1040,74 @@ def select_phrase_locked_beats(
                     previous_score
                 )
 
-
         phrase_indices = (
             get_phrase_selected_indices(
-
                 block_start,
                 block_end,
                 chosen_phase,
-                interval
-
+                interval,
             )
         )
-
 
         for beat_index in (
             phrase_indices
         ):
 
-
             shifted_time = (
-
                 float(
                     beat_times[
                         beat_index
                     ]
                 )
-
                 +
-
                 chosen_offset
-
             )
 
-
             if shifted_time <= 0:
-
                 continue
-
 
             strength = (
                 sample_curve_at_time(
-
                     accent_curve,
-
                     shifted_time,
-
                     sr,
-
-                    radius=1
-
+                    radius=1,
                 )
             )
 
+            selected_records.append({
+                "time":
+                shifted_time,
 
-            selected_records.append(
-                {
+                "strength":
+                strength,
 
-                    "time":
-                    shifted_time,
-
-                    "strength":
-                    strength,
-
-                    "beat_index":
-                    beat_index,
-
-                    "block":
-                    block_number
-
-                }
-            )
-
-
-        phrase_states.append(
-            {
+                "beat_index":
+                beat_index,
 
                 "block":
                 block_number,
+            })
 
-                "start_beat":
-                block_start,
+        phrase_states.append({
+            "block":
+            block_number,
 
-                "end_beat":
-                block_end,
+            "start_beat":
+            block_start,
 
-                "phase":
-                chosen_phase,
+            "end_beat":
+            block_end,
 
-                "offset":
-                chosen_offset,
+            "phase":
+            chosen_phase,
 
-                "score":
-                chosen_score
+            "offset":
+            chosen_offset,
 
-            }
-        )
-
+            "score":
+            chosen_score,
+        })
 
         previous_phase = (
             chosen_phase
@@ -1603,28 +1119,19 @@ def select_phrase_locked_beats(
 
         block_number += 1
 
-
     selected_records = sorted(
-
         selected_records,
-
         key=lambda item:
-        item[
-            "time"
-        ]
-
+        item["time"]
     )
-
 
     if len(
         selected_records
     ) == 0:
-
         return (
             [],
             phrase_states
         )
-
 
     target_gap = (
         beat_period
@@ -1632,93 +1139,55 @@ def select_phrase_locked_beats(
         interval
     )
 
-
     minimum_gap = (
         target_gap
         *
         0.55
     )
 
-
     cleaned = []
-
 
     for record in (
         selected_records
     ):
 
-
         if not cleaned:
-
             cleaned.append(
                 record
             )
-
             continue
 
-
         previous = (
-            cleaned[
-                -1
-            ]
+            cleaned[-1]
         )
-
 
         gap = (
-
-            record[
-                "time"
-            ]
-
+            record["time"]
             -
-
-            previous[
-                "time"
-            ]
-
+            previous["time"]
         )
-
 
         if gap < minimum_gap:
 
-
             if (
-
-                record[
-                    "strength"
-                ]
-
+                record["strength"]
                 >
-
-                previous[
-                    "strength"
-                ]
-
+                previous["strength"]
             ):
-
-                cleaned[
-                    -1
-                ] = record
-
+                cleaned[-1] = (
+                    record
+                )
 
         else:
-
             cleaned.append(
                 record
             )
 
-
     selected_times = [
-
-        item[
-            "time"
-        ]
-
+        item["time"]
         for item
         in cleaned
-
     ]
-
 
     return (
         selected_times,
@@ -1734,158 +1203,98 @@ def calculate_band_activity(
     y,
     sr
 ):
-
     """
-    Calculate separate low-frequency and upper-frequency
-    activity.
+    Low-frequency change:
+    kick / bass / low percussion.
 
-    Low:
-    kick / bass / low percussion
-
-    High:
-    piano attacks / guitar / claps / cymbals / bright synths
+    High-frequency change:
+    piano / guitar / claps / cymbals / bright synths.
     """
 
     n_fft = 2048
 
-
     magnitude = np.abs(
         librosa.stft(
-
             y,
-
             n_fft=n_fft,
-
-            hop_length=HOP_LENGTH
-
+            hop_length=HOP_LENGTH,
         )
     )
-
 
     frequencies = (
         librosa.fft_frequencies(
-
             sr=sr,
-
             n_fft=n_fft
-
         )
     )
-
 
     low_mask = (
-
         (
-            frequencies
-            >=
-            30
+            frequencies >= 30
         )
-
         &
-
         (
-            frequencies
-            <=
-            220
+            frequencies <= 220
         )
-
     )
-
 
     high_mask = (
-
         (
-            frequencies
-            >=
-            600
+            frequencies >= 600
         )
-
         &
-
         (
-            frequencies
-            <=
-            8000
+            frequencies <= 8000
         )
-
     )
 
-
     low_energy = np.mean(
-
         magnitude[
             low_mask,
             :
         ],
-
         axis=0
-
     )
 
-
     high_energy = np.mean(
-
         magnitude[
             high_mask,
             :
         ],
-
         axis=0
-
     )
 
-
-    # Log scale makes changes more useful.
     low_log = np.log1p(
         low_energy
     )
-
 
     high_log = np.log1p(
         high_energy
     )
 
-
-    # Positive spectral changes behave like
-    # frequency-specific onset detection.
     low_change = np.maximum(
-
         np.diff(
             low_log,
-            prepend=low_log[
-                0
-            ]
+            prepend=low_log[0]
         ),
-
         0
-
     )
-
 
     high_change = np.maximum(
-
         np.diff(
             high_log,
-            prepend=high_log[
-                0
-            ]
+            prepend=high_log[0]
         ),
-
         0
-
     )
 
-
     return (
-
         normalize_feature(
             low_change
         ),
-
         normalize_feature(
             high_change
-        )
-
+        ),
     )
 
 
@@ -1893,214 +1302,121 @@ def build_song_analysis(
     y,
     sr
 ):
-
     """
-    Produce independent musical signals.
+    Build independent musical signals.
 
-    Nothing here decides where an edit MUST happen.
-
-    It only describes the song.
+    This describes the song.
+    It does NOT choose Smart Edit cuts.
     """
-
-    # -----------------------------------------------------
-    # OVERALL ONSET
-    # -----------------------------------------------------
 
     onset_envelope = (
         librosa.onset.onset_strength(
-
             y=y,
-
             sr=sr,
-
-            hop_length=HOP_LENGTH
-
+            hop_length=HOP_LENGTH,
         )
     )
-
 
     onset = normalize_feature(
         onset_envelope
     )
 
-
     target_length = len(
         onset
     )
 
-
-    # -----------------------------------------------------
-    # ENERGY
-    # -----------------------------------------------------
-
     rms = (
         librosa.feature.rms(
-
             y=y,
-
             frame_length=2048,
-
-            hop_length=HOP_LENGTH
-
+            hop_length=HOP_LENGTH,
         )[0]
     )
 
-
-    rms = match_feature_length(
-        rms,
-        target_length
-    )
-
-
     rms = normalize_feature(
-        rms
+        match_feature_length(
+            rms,
+            target_length
+        )
     )
-
-
-    # -----------------------------------------------------
-    # BRIGHTNESS
-    # -----------------------------------------------------
 
     brightness = (
         librosa.feature.spectral_centroid(
-
             y=y,
-
             sr=sr,
-
             n_fft=2048,
-
-            hop_length=HOP_LENGTH
-
+            hop_length=HOP_LENGTH,
         )[0]
     )
 
-
-    brightness = (
+    brightness = normalize_feature(
         match_feature_length(
-
             brightness,
-
             target_length
-
         )
     )
-
-
-    brightness = (
-        normalize_feature(
-            brightness
-        )
-    )
-
-
-    # -----------------------------------------------------
-    # LOW / HIGH FREQUENCY HITS
-    # -----------------------------------------------------
 
     (
         bass_hit,
         high_hit
-
-    ) = (
-        calculate_band_activity(
-            y,
-            sr
-        )
+    ) = calculate_band_activity(
+        y,
+        sr
     )
-
 
     bass_hit = (
         match_feature_length(
-
             bass_hit,
-
             target_length
-
         )
     )
-
 
     high_hit = (
         match_feature_length(
-
             high_hit,
-
             target_length
-
         )
     )
-
-
-    # -----------------------------------------------------
-    # BEATS
-    # -----------------------------------------------------
 
     _, beat_frames = (
         librosa.beat.beat_track(
-
             onset_envelope=(
                 onset_envelope
             ),
-
             sr=sr,
-
-            hop_length=HOP_LENGTH
-
+            hop_length=HOP_LENGTH,
         )
     )
-
 
     beat_frames = np.asarray(
         beat_frames,
         dtype=int
     )
 
-
     beat_times = (
         librosa.frames_to_time(
-
             beat_frames,
-
             sr=sr,
-
-            hop_length=HOP_LENGTH
-
+            hop_length=HOP_LENGTH,
         )
     )
-
 
     beat_pulse = np.zeros(
         target_length
     )
 
-
-    for frame in (
-        beat_frames
-    ):
-
+    for frame in beat_frames:
 
         if (
-            frame
-            >=
             0
-            and
+            <=
             frame
             <
             target_length
         ):
-
             beat_pulse[
                 frame
             ] = 1.0
-
-
-    # -----------------------------------------------------
-    # ONSET DENSITY
-    #
-    # Helps identify moments where increasingly many
-    # musical events are happening.
-    # -----------------------------------------------------
 
     frames_per_second = (
         sr
@@ -2108,116 +1424,72 @@ def build_song_analysis(
         HOP_LENGTH
     )
 
-
     density_window = max(
-
         2,
-
         int(
             round(
                 2.0
                 *
                 frames_per_second
             )
-        )
-
+        ),
     )
-
-
-    onset_density = (
-        moving_average(
-
-            onset,
-
-            density_window
-
-        )
-    )
-
 
     onset_density = (
         normalize_feature(
-            onset_density
+            moving_average(
+                onset,
+                density_window
+            )
         )
     )
 
-
-    # -----------------------------------------------------
-    # BUILDUP SCORE
-    #
-    # Look at roughly four seconds of:
-    #
-    # rising energy
-    # rising brightness
-    # rising onset density
-    # -----------------------------------------------------
-
     build_window = max(
-
         4,
-
         int(
             round(
                 4.0
                 *
                 frames_per_second
             )
-        )
-
+        ),
     )
-
 
     energy_rise = (
         rising_trend(
-
             rms,
-
             build_window
-
         )
     )
-
 
     brightness_rise = (
         rising_trend(
-
             brightness,
-
             build_window
-
         )
     )
-
 
     density_rise = (
         rising_trend(
-
             onset_density,
-
             build_window
-
         )
     )
 
-
     percussive_activity = (
         moving_average(
-
             np.maximum(
                 onset,
                 bass_hit
             ),
-
             max(
                 2,
                 int(
                     frames_per_second
                 )
-            )
-
+            ),
         )
     )
-
 
     percussive_activity = (
         normalize_feature(
@@ -2225,9 +1497,7 @@ def build_song_analysis(
         )
     )
 
-
     build_score = (
-
         0.40
         *
         energy_rise
@@ -2249,9 +1519,7 @@ def build_song_analysis(
         0.13
         *
         percussive_activity
-
     )
-
 
     build_score = (
         normalize_feature(
@@ -2259,24 +1527,17 @@ def build_song_analysis(
         )
     )
 
-
     times = (
         librosa.frames_to_time(
-
             np.arange(
                 target_length
             ),
-
             sr=sr,
-
-            hop_length=HOP_LENGTH
-
+            hop_length=HOP_LENGTH,
         )
     )
 
-
     return {
-
         "times":
         times,
 
@@ -2309,63 +1570,43 @@ def build_song_analysis(
 
         "beat_pulse":
         beat_pulse,
-
     }
 
-
-# =========================================================
-# ANALYZER EVENT DETECTION
-# =========================================================
 
 def calculate_beat_alignment(
     event_time,
     beat_times,
     beat_period
 ):
-
     if len(
         beat_times
     ) == 0:
-
         return 0.0
-
 
     distance = float(
         np.min(
             np.abs(
-
                 beat_times
                 -
                 event_time
-
             )
         )
     )
 
-
     tolerance = max(
-
         0.08,
-
         beat_period
         *
         0.45
-
     )
 
-
     alignment = (
-
         1.0
-
         -
-
         distance
         /
         tolerance
-
     )
-
 
     return float(
         np.clip(
@@ -2381,10 +1622,9 @@ def calculate_pause_before_hit(
     frame,
     sr
 ):
-
     """
-    High value means there was a noticeable drop in
-    energy immediately before the hit.
+    High value means there was a noticeable
+    energy drop before the hit.
     """
 
     fps = (
@@ -2393,13 +1633,11 @@ def calculate_pause_before_hit(
         HOP_LENGTH
     )
 
-
     short_window = int(
         0.70
         *
         fps
     )
-
 
     context_window = int(
         2.50
@@ -2407,43 +1645,39 @@ def calculate_pause_before_hit(
         fps
     )
 
-
     pause_start = max(
-
         0,
-
         frame
         -
         short_window
-
     )
 
-
     context_start = max(
-
         0,
-
         pause_start
         -
         context_window
-
     )
 
-
-    pre_energy = float(
-        np.mean(
-
-            rms[
-                pause_start:
-                max(
-                    pause_start + 1,
-                    frame
-                )
-            ]
-
+    pre_values = rms[
+        pause_start:
+        max(
+            pause_start + 1,
+            frame
         )
-    )
+    ]
 
+    if len(
+        pre_values
+    ):
+        pre_energy = float(
+            np.mean(
+                pre_values
+            )
+        )
+
+    else:
+        pre_energy = 0.0
 
     context_values = rms[
         context_start:
@@ -2453,13 +1687,10 @@ def calculate_pause_before_hit(
         )
     ]
 
-
     if len(
         context_values
     ) == 0:
-
         return 0.0
-
 
     context_energy = float(
         np.mean(
@@ -2467,15 +1698,11 @@ def calculate_pause_before_hit(
         )
     )
 
-
     energy_drop = (
-
         context_energy
         -
         pre_energy
-
     )
-
 
     pause_score = (
         energy_drop
@@ -2483,25 +1710,14 @@ def calculate_pause_before_hit(
         3.0
     )
 
-
-    # Extra bonus if the immediate pre-hit area
-    # is genuinely quiet.
     if pre_energy < 0.20:
-
-        pause_score += (
-            0.20
-        )
-
+        pause_score += 0.20
 
     return float(
         np.clip(
-
             pause_score,
-
             0.0,
-
             1.0
-
         )
     )
 
@@ -2511,13 +1727,11 @@ def calculate_preceding_build(
     frame,
     sr
 ):
-
     fps = (
         sr
         /
         HOP_LENGTH
     )
-
 
     lookback = int(
         6.0
@@ -2525,47 +1739,34 @@ def calculate_preceding_build(
         fps
     )
 
-
     exclude_near_hit = int(
         0.15
         *
         fps
     )
 
-
     start = max(
-
         0,
-
         frame
         -
         lookback
-
     )
 
-
     end = max(
-
         start + 1,
-
         frame
         -
         exclude_near_hit
-
     )
-
 
     values = build_score[
         start:end
     ]
 
-
     if len(
         values
     ) == 0:
-
         return 0.0
-
 
     return float(
         np.max(
@@ -2578,7 +1779,6 @@ def detect_song_events(
     analysis,
     sr
 ):
-
     onset = analysis[
         "onset"
     ]
@@ -2603,67 +1803,42 @@ def detect_song_events(
         "beat_times"
     ]
 
-
     beat_period = (
         get_median_beat_period(
             beat_times
         )
     )
 
-
-    # Sensitive enough to preserve smaller accents.
     peak_frames = (
         librosa.util.peak_pick(
-
             onset,
-
             pre_max=2,
-
             post_max=2,
-
             pre_avg=5,
-
             post_avg=5,
-
             delta=0.035,
-
-            wait=2
-
+            wait=2,
         )
     )
 
-
     events = []
 
-
-    for frame in (
-        peak_frames
-    ):
-
+    for frame in peak_frames:
 
         if (
             frame < 0
             or
-            frame >= len(
-                onset
-            )
+            frame >= len(onset)
         ):
-
             continue
-
 
         event_time = float(
             librosa.frames_to_time(
-
                 frame,
-
                 sr=sr,
-
-                hop_length=HOP_LENGTH
-
+                hop_length=HOP_LENGTH,
             )
         )
-
 
         onset_strength = float(
             onset[
@@ -2671,13 +1846,11 @@ def detect_song_events(
             ]
         )
 
-
         bass_strength = float(
             bass_hit[
                 frame
             ]
         )
-
 
         high_strength = float(
             high_hit[
@@ -2685,73 +1858,45 @@ def detect_song_events(
             ]
         )
 
-
         energy_strength = float(
             rms[
                 frame
             ]
         )
 
-
         beat_alignment = (
             calculate_beat_alignment(
-
                 event_time,
-
                 beat_times,
-
-                beat_period
-
+                beat_period,
             )
         )
-
 
         pause_score = (
             calculate_pause_before_hit(
-
                 rms,
-
                 frame,
-
-                sr
-
+                sr,
             )
         )
-
 
         preceding_build = (
             calculate_preceding_build(
-
                 build_score,
-
                 frame,
-
-                sr
-
+                sr,
             )
         )
 
-
         distinctive_score = max(
-
             bass_strength,
-
             high_strength,
-
-            onset_strength
-
+            onset_strength,
         )
 
-
-        # -------------------------------------------------
-        # HIT STRENGTH
-        #
-        # Loud / strong attacks deliberately receive
-        # significant weight.
-        # -------------------------------------------------
-
+        # Loud / strong hits deliberately get
+        # major weight.
         hit_strength = (
-
             0.60
             *
             onset_strength
@@ -2773,30 +1918,17 @@ def detect_song_events(
             0.10
             *
             energy_strength
-
         )
-
 
         context_score = max(
-
             pause_score,
-
-            preceding_build
-
+            preceding_build,
         )
 
-
-        # -------------------------------------------------
-        # EDIT OPPORTUNITY
-        #
-        # This is NOT yet the Smart Edit cut score.
-        #
-        # It is simply a debugging indication of how
-        # interesting this moment appears.
-        # -------------------------------------------------
-
+        # Debugging score only.
+        # Smart Edit will later use a separate
+        # cut-selection model.
         opportunity = (
-
             0.40
             *
             hit_strength
@@ -2818,9 +1950,7 @@ def detect_song_events(
             0.15
             *
             distinctive_score
-
         )
-
 
         opportunity = float(
             np.clip(
@@ -2830,13 +1960,8 @@ def detect_song_events(
             )
         )
 
-
         # Keep fairly weak candidates too.
-        #
-        # The Analyzer should show opportunities rather
-        # than prematurely deleting them.
         if (
-
             onset_strength
             <
             0.20
@@ -2846,17 +1971,12 @@ def detect_song_events(
             distinctive_score
             <
             0.25
-
         ):
-
             continue
-
 
         labels = []
 
-
         if (
-
             pause_score
             >=
             0.45
@@ -2866,16 +1986,12 @@ def detect_song_events(
             onset_strength
             >=
             0.35
-
         ):
-
             labels.append(
                 "Post-pause hit"
             )
 
-
         if (
-
             preceding_build
             >=
             0.60
@@ -2885,49 +2001,35 @@ def detect_song_events(
             onset_strength
             >=
             0.35
-
         ):
-
             labels.append(
                 "Post-build hit"
             )
 
-
         if (
-
             onset_strength
             >=
             0.78
-
         ):
-
             labels.append(
                 "Very strong hit"
             )
 
-
         elif (
-
             onset_strength
             >=
             0.48
-
         ):
-
             labels.append(
                 "Strong hit"
             )
 
-
         else:
-
             labels.append(
                 "Accent"
             )
 
-
         if (
-
             high_strength
             >=
             0.55
@@ -2939,16 +2041,12 @@ def detect_song_events(
             bass_strength
             +
             0.08
-
         ):
-
             labels.append(
                 "High / tonal"
             )
 
-
         if (
-
             bass_strength
             >=
             0.55
@@ -2960,89 +2058,65 @@ def detect_song_events(
             high_strength
             +
             0.05
-
         ):
-
             labels.append(
                 "Bass / kick"
             )
 
+        events.append({
+            "Time":
+            event_time,
 
-        events.append(
-            {
+            "Event":
+            " + ".join(
+                labels
+            ),
 
-                "Time":
-                event_time,
+            "Opportunity":
+            opportunity,
 
-                "Event":
-                " + ".join(
-                    labels
-                ),
+            "Hit strength":
+            hit_strength,
 
-                "Opportunity":
-                opportunity,
+            "Beat alignment":
+            beat_alignment,
 
-                "Hit strength":
-                hit_strength,
+            "Pause before":
+            pause_score,
 
-                "Beat alignment":
-                beat_alignment,
+            "Build before":
+            preceding_build,
 
-                "Pause before":
-                pause_score,
+            "Bass":
+            bass_strength,
 
-                "Build before":
-                preceding_build,
+            "High / tonal":
+            high_strength,
 
-                "Bass":
-                bass_strength,
+            "Onset":
+            onset_strength,
+        })
 
-                "High / tonal":
-                high_strength,
-
-                "Onset":
-                onset_strength
-
-            }
-        )
-
-
-    events = sorted(
-
+    return sorted(
         events,
-
         key=lambda item:
-        item[
-            "Time"
-        ]
-
+        item["Time"]
     )
 
-
-    return events
-
-
-# =========================================================
-# BUILD REGION DETECTION
-# =========================================================
 
 def detect_build_regions(
     analysis,
     sr
 ):
-
     build = analysis[
         "build_score"
     ]
-
 
     times = analysis[
         "times"
     ]
 
-
     threshold = 0.52
-
 
     mask = (
         build
@@ -3050,45 +2124,34 @@ def detect_build_regions(
         threshold
     )
 
-
     minimum_frames = max(
-
         2,
-
         int(
             round(
-
                 0.90
-
                 *
                 sr
-
                 /
                 HOP_LENGTH
-
             )
-        )
-
+        ),
     )
 
-
     regions = []
-
     start = None
-
 
     for index, active in enumerate(
         mask
     ):
 
-
-        if active and start is None:
-
+        if (
+            active
+            and
+            start is None
+        ):
             start = index
 
-
         if (
-
             start is not None
 
             and
@@ -3100,42 +2163,25 @@ def detect_build_regions(
 
                 index
                 ==
-                len(
-                    mask
-                )
-                -
-                1
+                len(mask) - 1
             )
-
         ):
 
-
             if active:
-
-                end = (
-                    index
-                    +
-                    1
-                )
+                end = index + 1
 
             else:
-
                 end = index
 
-
             if (
-                end
-                -
-                start
+                end - start
                 >=
                 minimum_frames
             ):
 
-
                 segment = build[
                     start:end
                 ]
-
 
                 peak_local = int(
                     np.argmax(
@@ -3143,78 +2189,60 @@ def detect_build_regions(
                     )
                 )
 
-
                 peak_index = (
                     start
                     +
                     peak_local
                 )
 
+                regions.append({
+                    "Start":
+                    float(
+                        times[
+                            start
+                        ]
+                    ),
 
-                regions.append(
-                    {
+                    "End":
+                    float(
+                        times[
+                            min(
+                                end - 1,
+                                len(times) - 1
+                            )
+                        ]
+                    ),
 
-                        "Start":
-                        float(
-                            times[
-                                start
-                            ]
-                        ),
+                    "Peak":
+                    float(
+                        times[
+                            peak_index
+                        ]
+                    ),
 
-                        "End":
-                        float(
-                            times[
-                                min(
-                                    end - 1,
-                                    len(
-                                        times
-                                    )
-                                    -
-                                    1
-                                )
-                            ]
-                        ),
-
-                        "Peak":
-                        float(
-                            times[
-                                peak_index
-                            ]
-                        ),
-
-                        "Score":
-                        float(
-                            build[
-                                peak_index
-                            ]
-                        )
-
-                    }
-                )
-
+                    "Score":
+                    float(
+                        build[
+                            peak_index
+                        ]
+                    ),
+                })
 
             start = None
 
-
     return regions
 
-
-# =========================================================
-# ANALYZER DISPLAY
-# =========================================================
 
 def show_song_analyzer(
     y,
     sr
 ):
-
     analysis = (
         build_song_analysis(
             y,
             sr
         )
     )
-
 
     events = (
         detect_song_events(
@@ -3223,7 +2251,6 @@ def show_song_analyzer(
         )
     )
 
-
     builds = (
         detect_build_regions(
             analysis,
@@ -3231,11 +2258,9 @@ def show_song_analyzer(
         )
     )
 
-
     beat_times = analysis[
         "beat_times"
     ]
-
 
     if len(
         beat_times
@@ -3247,7 +2272,6 @@ def show_song_analyzer(
             )
         )
 
-
         tempo = (
             60.0
             /
@@ -3255,283 +2279,235 @@ def show_song_analyzer(
         )
 
     else:
-
-        tempo = 0
-
+        tempo = 0.0
 
     st.success(
         "Song analysis complete."
     )
 
-
     metric1, metric2, metric3 = (
-        st.columns(
-            3
-        )
+        st.columns(3)
     )
 
-
     with metric1:
-
         st.metric(
             "Estimated tempo",
             (
                 f"{tempo:.1f} BPM"
                 if tempo > 0
                 else "—"
-            )
+            ),
         )
 
-
     with metric2:
-
         st.metric(
             "Detected beats",
             len(
                 beat_times
-            )
+            ),
         )
 
-
     with metric3:
-
         st.metric(
             "Musical events",
             len(
                 events
-            )
+            ),
         )
 
-
     # -----------------------------------------------------
-    # WAVEFORM / ENERGY
+    # ENERGY
     # -----------------------------------------------------
 
     st.subheader(
         "Energy"
     )
 
-
     st.caption(
         "Useful for seeing quiet sections, pauses, "
         "large energy changes and drops."
     )
 
-
     energy_dataframe = (
-        pd.DataFrame(
-            {
+        pd.DataFrame({
+            "Time":
+            analysis[
+                "times"
+            ],
 
-                "Time":
-                analysis[
-                    "times"
-                ],
-
-                "Energy":
-                analysis[
-                    "rms"
-                ]
-
-            }
-        )
+            "Energy":
+            analysis[
+                "rms"
+            ],
+        })
         .set_index(
             "Time"
         )
     )
-
 
     st.line_chart(
         energy_dataframe,
         height=220
     )
 
-
     # -----------------------------------------------------
-    # HIT ANALYSIS
+    # HITS
     # -----------------------------------------------------
 
     st.subheader(
         "Hits and musical accents"
     )
 
-
     st.caption(
         "Overall onset = general attacks. "
         "Bass = kick/low-frequency attacks. "
-        "High/Tonal = piano, guitar, cymbal, synth and "
-        "other brighter attacks. Beat spikes show the "
-        "detected beat grid."
+        "High/Tonal = piano, guitar, cymbal, synth "
+        "and other brighter attacks. "
+        "Beat spikes show the detected beat grid."
     )
 
-
     hit_dataframe = (
-        pd.DataFrame(
-            {
+        pd.DataFrame({
+            "Time":
+            analysis[
+                "times"
+            ],
 
-                "Time":
-                analysis[
-                    "times"
-                ],
+            "Overall onset":
+            analysis[
+                "onset"
+            ],
 
-                "Overall onset":
-                analysis[
-                    "onset"
-                ],
+            "Bass hit":
+            analysis[
+                "bass_hit"
+            ],
 
-                "Bass hit":
-                analysis[
-                    "bass_hit"
-                ],
+            "High / tonal hit":
+            analysis[
+                "high_hit"
+            ],
 
-                "High / tonal hit":
-                analysis[
-                    "high_hit"
-                ],
-
-                "Beat":
-                analysis[
-                    "beat_pulse"
-                ]
-
-            }
-        )
+            "Beat":
+            analysis[
+                "beat_pulse"
+            ],
+        })
         .set_index(
             "Time"
         )
     )
-
 
     st.line_chart(
         hit_dataframe,
         height=300
     )
 
-
     # -----------------------------------------------------
-    # BUILD ANALYSIS
+    # BUILDS
     # -----------------------------------------------------
 
     st.subheader(
         "Build-up analysis"
     )
 
-
     st.caption(
         "The build score looks for increasing energy, "
         "brightness, musical activity and percussion."
     )
 
-
     build_dataframe = (
-        pd.DataFrame(
-            {
+        pd.DataFrame({
+            "Time":
+            analysis[
+                "times"
+            ],
 
-                "Time":
-                analysis[
-                    "times"
-                ],
+            "Build score":
+            analysis[
+                "build_score"
+            ],
 
-                "Build score":
-                analysis[
-                    "build_score"
-                ],
+            "Onset density":
+            analysis[
+                "onset_density"
+            ],
 
-                "Onset density":
-                analysis[
-                    "onset_density"
-                ],
-
-                "Brightness":
-                analysis[
-                    "brightness"
-                ]
-
-            }
-        )
+            "Brightness":
+            analysis[
+                "brightness"
+            ],
+        })
         .set_index(
             "Time"
         )
     )
-
 
     st.line_chart(
         build_dataframe,
         height=260
     )
 
-
     # -----------------------------------------------------
-    # DETECTED BUILDS
+    # POSSIBLE BUILDS
     # -----------------------------------------------------
 
     st.subheader(
         "Possible builds"
     )
 
-
     if len(
         builds
     ) == 0:
-
 
         st.write(
             "No clear build regions detected."
         )
 
-
     else:
-
 
         build_rows = []
 
-
         for build in builds:
 
+            build_rows.append({
+                "Start":
+                format_time(
+                    build[
+                        "Start"
+                    ]
+                ),
 
-            build_rows.append(
-                {
+                "End":
+                format_time(
+                    build[
+                        "End"
+                    ]
+                ),
 
-                    "Start":
-                    format_time(
-                        build[
-                            "Start"
-                        ]
-                    ),
+                "Peak":
+                format_time(
+                    build[
+                        "Peak"
+                    ]
+                ),
 
-                    "End":
-                    format_time(
-                        build[
-                            "End"
-                        ]
-                    ),
-
-                    "Peak":
-                    format_time(
-                        build[
-                            "Peak"
-                        ]
-                    ),
-
-                    "Build score":
-                    round(
-                        build[
-                            "Score"
-                        ],
-                        2
-                    )
-
-                }
-            )
-
+                "Build score":
+                round(
+                    build[
+                        "Score"
+                    ],
+                    2
+                ),
+            })
 
         st.dataframe(
             pd.DataFrame(
                 build_rows
             ),
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
         )
-
 
     # -----------------------------------------------------
     # EVENT TABLE
@@ -3541,93 +2517,84 @@ def show_song_analyzer(
         "Detected musical events"
     )
 
-
     st.caption(
         "These are candidates, not automatic cuts. "
         "Several nearby hits are intentionally kept."
     )
 
-
     event_rows = []
-
 
     for event in events:
 
-
-        event_rows.append(
-            {
-
-                "Time":
-                format_time(
-                    event[
-                        "Time"
-                    ]
-                ),
-
-                "Event":
+        event_rows.append({
+            "Time":
+            format_time(
                 event[
-                    "Event"
+                    "Time"
+                ]
+            ),
+
+            "Event":
+            event[
+                "Event"
+            ],
+
+            "Opportunity":
+            round(
+                event[
+                    "Opportunity"
                 ],
+                2
+            ),
 
-                "Opportunity":
-                round(
-                    event[
-                        "Opportunity"
-                    ],
-                    2
-                ),
+            "Hit":
+            round(
+                event[
+                    "Hit strength"
+                ],
+                2
+            ),
 
-                "Hit":
-                round(
-                    event[
-                        "Hit strength"
-                    ],
-                    2
-                ),
+            "Beat":
+            round(
+                event[
+                    "Beat alignment"
+                ],
+                2
+            ),
 
-                "Beat":
-                round(
-                    event[
-                        "Beat alignment"
-                    ],
-                    2
-                ),
+            "Pause":
+            round(
+                event[
+                    "Pause before"
+                ],
+                2
+            ),
 
-                "Pause":
-                round(
-                    event[
-                        "Pause before"
-                    ],
-                    2
-                ),
+            "Build":
+            round(
+                event[
+                    "Build before"
+                ],
+                2
+            ),
 
-                "Build":
-                round(
-                    event[
-                        "Build before"
-                    ],
-                    2
-                ),
+            "Bass":
+            round(
+                event[
+                    "Bass"
+                ],
+                2
+            ),
 
-                "Bass":
-                round(
-                    event[
-                        "Bass"
-                    ],
-                    2
-                ),
-
-                "High":
-                round(
-                    event[
-                        "High / tonal"
-                    ],
-                    2
-                )
-
-            }
-        )
-
+            "High":
+            round(
+                event[
+                    "High / tonal"
+                ],
+                2
+            ),
+        })
 
     event_dataframe = (
         pd.DataFrame(
@@ -3635,17 +2602,14 @@ def show_song_analyzer(
         )
     )
 
-
     st.dataframe(
         event_dataframe,
         use_container_width=True,
         hide_index=True,
-        height=500
+        height=500,
     )
 
-
     if not event_dataframe.empty:
-
 
         csv_bytes = (
             event_dataframe
@@ -3657,14 +2621,13 @@ def show_song_analyzer(
             )
         )
 
-
         st.download_button(
             "Download analysis CSV",
             data=csv_bytes,
             file_name=(
                 "DetectTheBeat_SongAnalysis.csv"
             ),
-            mime="text/csv"
+            mime="text/csv",
         )
 
 
@@ -3678,7 +2641,7 @@ mode = st.radio(
         "Beat",
         "Song Analyzer"
     ],
-    horizontal=True
+    horizontal=True,
 )
 
 
@@ -3693,15 +2656,13 @@ uploaded_file = (
             "mp3",
             "wav",
             "m4a"
-        ]
+        ],
     )
 )
-
 
 st.caption(
     "MP3, WAV or M4A · Maximum length: 6 minutes"
 )
-
 
 if uploaded_file is not None:
 
@@ -3720,58 +2681,47 @@ if (
     "Song Analyzer"
 ):
 
-
     st.write(
         "Song Analyzer finds beats, hits, pauses, "
         "build-ups and distinctive musical accents. "
         "It does not choose Smart Edit cuts yet."
     )
 
-
     if (
         uploaded_file
         is not None
     ):
-
 
         if st.button(
             "🔍 Analyze Song",
             type="primary"
         ):
 
-
             status = None
-
 
             try:
 
-
                 status = st.status(
                     "Analyzing song...",
-                    expanded=True
+                    expanded=True,
                 )
 
-
                 with tempfile.TemporaryDirectory() as work_dir:
-
 
                     work_dir = Path(
                         work_dir
                     )
 
-
                     status.write(
                         "1/4 · Preparing audio"
                     )
 
-
                     audio_path = (
                         save_uploaded_audio(
                             uploaded_file,
-                            work_dir
+                            work_dir,
                         )
                     )
-
 
                     duration = (
                         get_audio_duration(
@@ -3781,78 +2731,93 @@ if (
                         )
                     )
 
-
                     if (
                         duration
                         >
                         MAX_AUDIO_DURATION
                     ):
 
-
                         status.update(
                             label=(
                                 "Audio is too long"
                             ),
-                            state="error"
+                            state="error",
                         )
-
 
                         st.error(
                             "Please upload a track "
                             "of 6 minutes or less."
                         )
 
-
                         st.stop()
-
 
                     analysis_path = (
                         create_analysis_wav(
                             audio_path,
-                            work_dir
+                            work_dir,
                         )
                     )
-
 
                     status.write(
                         "2/4 · Reading waveform"
                     )
 
-
                     y, sr = librosa.load(
-
                         str(
                             analysis_path
                         ),
-
                         sr=None,
-
-                        mono=True
-
+                        mono=True,
                     )
-
 
                     status.write(
                         "3/4 · Detecting musical structure"
                     )
 
-
                     status.write(
                         "4/4 · Finding editing opportunities"
                     )
 
-
-                    status.update(
-                        label="Analysis ready",
-                        state="complete",
-                        expanded=False
-                    )
-
-
-                    show_song_analyzer(
+                    analysis_output = (
                         y,
                         sr
                     )
+
+                status.update(
+                    label="Analysis ready",
+                    state="complete",
+                    expanded=False,
+                )
+
+                show_song_analyzer(
+                    analysis_output[0],
+                    analysis_output[1],
+                )
+
+            except Exception as error:
+
+                if status is not None:
+
+                    try:
+                        status.update(
+                            label=(
+                                "Song analysis failed"
+                            ),
+                            state="error",
+                        )
+
+                    except Exception:
+                        pass
+
+                st.error(
+                    "Song analysis failed."
+                )
+
+                st.code(
+                    str(
+                        error
+                    )
+                )
 
 
 # =========================================================
@@ -3861,22 +2826,18 @@ if (
 
 else:
 
-
     st.write(
         "Beat mode creates a checkerboard reference video "
         "for Scene Edit Detection."
     )
 
-
     st.subheader(
         "Video settings"
     )
 
-
     st.caption(
         "Output: 16:9 · 1920×1080"
     )
-
 
     fps_choice = st.radio(
         "Frame rate",
@@ -3884,20 +2845,18 @@ else:
             "25 fps",
             "23.976 fps"
         ],
-        horizontal=True
+        horizontal=True,
     )
-
 
     beat_choice = st.radio(
         "Scene change",
         options=[
             "Every beat",
             "Every 2 beats",
-            "Every 4 beats"
+            "Every 4 beats",
         ],
-        index=2
+        index=2,
     )
-
 
     FPS_VALUE = (
         FPS_OPTIONS[
@@ -3907,7 +2866,6 @@ else:
         ]
     )
 
-
     FPS_FFMPEG = (
         FPS_OPTIONS[
             fps_choice
@@ -3916,73 +2874,58 @@ else:
         ]
     )
 
-
     BEAT_INTERVAL = (
         BEAT_INTERVALS[
             beat_choice
         ]
     )
 
-
     if (
         uploaded_file
         is not None
     ):
 
-
         download_filename = (
             make_output_filename(
-
                 uploaded_file.name,
-
-                beat_choice
-
+                beat_choice,
             )
         )
-
 
         if st.button(
             "🚀 Generate Video",
             type="primary"
         ):
 
-
             status = None
-
 
             try:
 
-
                 status = st.status(
                     "Preparing audio...",
-                    expanded=True
+                    expanded=True,
                 )
 
-
                 with tempfile.TemporaryDirectory() as work_dir:
-
 
                     work_dir = Path(
                         work_dir
                     )
 
-
-                    # =============================================
+                    # ==========================================
                     # STEP 1
-                    # =============================================
+                    # ==========================================
 
                     status.write(
                         "1/5 · Checking audio"
                     )
 
-
                     audio_path = (
                         save_uploaded_audio(
                             uploaded_file,
-                            work_dir
+                            work_dir,
                         )
                     )
-
 
                     total_duration = (
                         get_audio_duration(
@@ -3992,30 +2935,25 @@ else:
                         )
                     )
 
-
                     if (
                         total_duration
                         >
                         MAX_AUDIO_DURATION
                     ):
 
-
                         status.update(
                             label=(
                                 "Audio is too long"
                             ),
-                            state="error"
+                            state="error",
                         )
-
 
                         st.error(
                             "Please upload a track "
                             "of 6 minutes or less."
                         )
 
-
                         st.stop()
-
 
                     minutes = int(
                         total_duration
@@ -4023,13 +2961,11 @@ else:
                         60
                     )
 
-
                     seconds = int(
                         total_duration
                         %
                         60
                     )
-
 
                     status.write(
                         f"Audio length: "
@@ -4037,94 +2973,70 @@ else:
                         f"{seconds:02d}"
                     )
 
-
-                    # =============================================
+                    # ==========================================
                     # STEP 2
-                    # =============================================
+                    # ==========================================
 
                     status.write(
                         "2/5 · Preparing audio "
                         "for beat detection"
                     )
 
-
                     analysis_path = (
                         create_analysis_wav(
                             audio_path,
-                            work_dir
+                            work_dir,
                         )
                     )
 
-
-                    # =============================================
+                    # ==========================================
                     # STEP 3
-                    # =============================================
+                    # ==========================================
 
                     status.write(
                         "3/5 · Detecting rhythm "
                         "and strong musical accents"
                     )
 
-
                     y, sr = librosa.load(
-
                         str(
                             analysis_path
                         ),
-
                         sr=None,
-
-                        mono=True
-
+                        mono=True,
                     )
-
 
                     onset_envelope = (
                         librosa.onset.onset_strength(
-
                             y=y,
-
                             sr=sr,
-
                             hop_length=(
                                 HOP_LENGTH
-                            )
-
+                            ),
                         )
                     )
-
 
                     _, beat_frames = (
                         librosa.beat.beat_track(
-
                             onset_envelope=(
                                 onset_envelope
                             ),
-
                             sr=sr,
-
                             hop_length=(
                                 HOP_LENGTH
-                            )
-
+                            ),
                         )
                     )
-
 
                     beat_times = (
                         librosa.frames_to_time(
-
                             beat_frames,
-
                             sr=sr,
-
                             hop_length=(
                                 HOP_LENGTH
-                            )
-
+                            ),
                         )
                     )
-
 
                     if (
                         len(
@@ -4134,52 +3046,38 @@ else:
                         0
                     ):
 
-
                         raise RuntimeError(
                             "No reliable beats were "
                             "detected in this track."
                         )
 
-
                     accent_curve = (
                         build_accent_curve(
-
                             y=y,
-
                             sr=sr,
-
                             onset_envelope=(
                                 onset_envelope
-                            )
-
+                            ),
                         )
                     )
-
 
                     (
                         selected_beats,
-                        phrase_states
-
+                        phrase_states,
                     ) = (
                         select_phrase_locked_beats(
-
                             beat_times=(
                                 beat_times
                             ),
-
                             accent_curve=(
                                 accent_curve
                             ),
-
                             sr=sr,
-
                             interval=(
                                 BEAT_INTERVAL
-                            )
-
+                            ),
                         )
                     )
-
 
                     status.write(
                         f"Detected "
@@ -4187,21 +3085,17 @@ else:
                         f"base beats"
                     )
 
-
                     if (
                         BEAT_INTERVAL
                         ==
                         1
                     ):
 
-
                         status.write(
                             "Using every detected beat"
                         )
 
-
                     else:
-
 
                         status.write(
                             f"Selected "
@@ -4209,11 +3103,9 @@ else:
                             f"phrase-locked edit points"
                         )
 
-
                         if len(
                             phrase_states
                         ) > 0:
-
 
                             initial_offset = (
                                 phrase_states[
@@ -4223,37 +3115,27 @@ else:
                                 ]
                             )
 
-
                             offset_ms = int(
                                 round(
-
                                     initial_offset
                                     *
                                     1000
-
                                 )
                             )
-
 
                             status.write(
                                 f"Opening rhythm alignment: "
                                 f"{offset_ms:+d} ms"
                             )
 
-
                             number_of_changes = 0
 
-
                             for state_index in range(
-
                                 1,
-
                                 len(
                                     phrase_states
-                                )
-
+                                ),
                             ):
-
 
                                 current_state = (
                                     phrase_states[
@@ -4261,24 +3143,17 @@ else:
                                     ]
                                 )
 
-
                                 previous_state = (
                                     phrase_states[
-                                        state_index
-                                        -
-                                        1
+                                        state_index - 1
                                     ]
                                 )
 
-
                                 if (
-
                                     current_state[
                                         "phase"
                                     ]
-
                                     !=
-
                                     previous_state[
                                         "phase"
                                     ]
@@ -4286,99 +3161,69 @@ else:
                                     or
 
                                     abs(
-
                                         current_state[
                                             "offset"
                                         ]
-
                                         -
-
                                         previous_state[
                                             "offset"
                                         ]
-
                                     )
-
                                     >
                                     0.01
-
                                 ):
-
 
                                     number_of_changes += (
                                         1
                                     )
-
 
                             status.write(
                                 f"Rhythm alignment changes: "
                                 f"{number_of_changes}"
                             )
 
-
                     del y
-
                     del onset_envelope
-
                     del accent_curve
 
-
-                    # =============================================
+                    # ==========================================
                     # FRAME CONVERSION
-                    # =============================================
+                    # ==========================================
 
                     total_video_frames = (
                         math.ceil(
-
                             total_duration
-
                             *
                             FPS_VALUE
-
                         )
                     )
 
-
                     scene_change_frames = []
-
 
                     for beat in (
                         selected_beats
                     ):
 
-
                         frame_number = (
                             beat_time_to_frame(
-
                                 float(
                                     beat
                                 ),
-
-                                FPS_VALUE
-
+                                FPS_VALUE,
                             )
                         )
 
-
                         if (
-
-                            frame_number
-                            >
                             0
-
-                            and
-
+                            <
                             frame_number
                             <
                             total_video_frames
-
                         ):
-
 
                             scene_change_frames.append(
                                 frame_number
                             )
-
 
                     scene_change_frames = sorted(
                         set(
@@ -4386,23 +3231,20 @@ else:
                         )
                     )
 
-
                     status.write(
                         f"Creating "
                         f"{len(scene_change_frames)} "
                         f"scene changes"
                     )
 
-
-                    # =============================================
+                    # ==========================================
                     # STEP 4
-                    # =============================================
+                    # ==========================================
 
                     status.write(
                         "4/5 · Building "
                         "frame-accurate video"
                     )
-
 
                     raw_video_path = (
                         work_dir
@@ -4410,30 +3252,20 @@ else:
                         "reference.rgb"
                     )
 
-
                     change_index = 0
-
                     pattern_index = -1
 
-
                     with open(
-
                         raw_video_path,
-
                         "wb"
-
                     ) as raw_video:
-
 
                         for frame_number in range(
                             total_video_frames
                         ):
 
-
                             while (
-
                                 change_index
-
                                 <
                                 len(
                                     scene_change_frames
@@ -4442,70 +3274,47 @@ else:
                                 and
 
                                 frame_number
-
                                 >=
-
                                 scene_change_frames[
                                     change_index
                                 ]
-
                             ):
 
-
-                                pattern_index += (
-                                    1
-                                )
-
-                                change_index += (
-                                    1
-                                )
-
+                                pattern_index += 1
+                                change_index += 1
 
                             if pattern_index < 0:
-
-
                                 frame_data = (
                                     BLACK_FRAME
                                 )
 
-
                             elif (
-
                                 pattern_index
                                 %
                                 2
                                 ==
                                 0
-
                             ):
-
-
                                 frame_data = (
                                     PATTERN_A_FRAME
                                 )
 
-
                             else:
-
-
                                 frame_data = (
                                     PATTERN_B_FRAME
                                 )
-
 
                             raw_video.write(
                                 frame_data
                             )
 
-
-                    # =============================================
+                    # ==========================================
                     # STEP 5
-                    # =============================================
+                    # ==========================================
 
                     status.write(
                         "5/5 · Rendering video"
                     )
-
 
                     output_path = (
                         work_dir
@@ -4513,47 +3322,35 @@ else:
                         "detectthebeat_video.mp4"
                     )
 
-
                     run_command([
                         FFMPEG_EXE,
-
                         "-y",
-
                         "-loglevel",
                         "error",
-
                         "-f",
                         "rawvideo",
-
                         "-pix_fmt",
                         "rgb24",
-
                         "-s:v",
                         (
                             f"{INTERNAL_WIDTH}"
                             f"x"
                             f"{INTERNAL_HEIGHT}"
                         ),
-
                         "-r",
                         FPS_FFMPEG,
-
                         "-i",
                         str(
                             raw_video_path
                         ),
-
                         "-i",
                         str(
                             audio_path
                         ),
-
                         "-map",
                         "0:v:0",
-
                         "-map",
                         "1:a:0",
-
                         "-vf",
                         (
                             f"scale="
@@ -4562,44 +3359,34 @@ else:
                             f"flags=neighbor,"
                             f"format=yuv420p"
                         ),
-
                         "-c:v",
                         "libx264",
-
                         "-preset",
                         "ultrafast",
-
                         "-crf",
                         "18",
-
                         "-c:a",
                         "aac",
-
                         "-b:a",
                         "192k",
-
                         "-shortest",
-
                         "-movflags",
                         "+faststart",
-
                         str(
                             output_path
-                        )
+                        ),
                     ])
 
-
                     video_bytes = (
-                        output_path.read_bytes()
+                        output_path
+                        .read_bytes()
                     )
-
 
                 status.update(
                     label="Video ready!",
                     state="complete",
-                    expanded=False
+                    expanded=False,
                 )
-
 
                 st.success(
                     f"Created "
@@ -4607,26 +3394,18 @@ else:
                     f"scene changes."
                 )
 
-
                 st.video(
                     video_bytes
                 )
 
-
                 st.download_button(
-
                     label="📥 Download Video",
-
                     data=video_bytes,
-
                     file_name=(
                         download_filename
                     ),
-
-                    mime="video/mp4"
-
+                    mime="video/mp4",
                 )
-
 
                 st.info(
                     "Import the MP4 into your editing software "
@@ -4635,36 +3414,27 @@ else:
                     "audio file for the final edit."
                 )
 
-
             except Exception as error:
-
 
                 if status is not None:
 
-
                     try:
-
-
                         status.update(
                             label=(
                                 "Something went wrong"
                             ),
-                            state="error"
+                            state="error",
                         )
 
-
                     except Exception:
-
                         pass
-
 
                 st.error(
                     "Video generation failed."
                 )
 
-
                 st.code(
                     str(
                         error
                     )
-    )
+                )
