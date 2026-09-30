@@ -1368,7 +1368,7 @@ def build_editorial_candidates(events):
         if (
             event["Onset"] >= 0.78
             and
-            event["Hit strength"] >= 0.65
+            event["Hit strength"] >= 0.645
             and
             prominence >= 0.80
         ):
@@ -2247,6 +2247,7 @@ def show_song_analyzer(
                 candidate_csv_filename
             ),
             mime="text/csv",
+            on_click="ignore",
         )
 
     # -----------------------------------------------------
@@ -2348,6 +2349,7 @@ def show_song_analyzer(
                     raw_csv_filename
                 ),
                 mime="text/csv",
+                on_click="ignore",
             )
 
 
@@ -2786,6 +2788,7 @@ else:
                     data=video_bytes,
                     file_name=download_filename,
                     mime="video/mp4",
+                    on_click="ignore",
                 )
 
                 st.info(
