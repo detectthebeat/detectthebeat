@@ -855,6 +855,59 @@ def get_event_tier(opportunity):
     return "LOW"
 
 
+def calculate_event_opportunity(event):
+    """
+    Recalculate the analyzer/debugging opportunity score from
+    the event's current components.
+
+    Distinctive tonal attacks are protected from dropping to LOW
+    only because they sit between beats. This is deliberately a
+    minimum floor, not an automatic PRIMARY/STRONG promotion.
+    """
+
+    distinctive_score = max(
+        event["Bass"],
+        event["High / tonal"],
+        event["Onset"],
+    )
+
+    context_score = max(
+        event["Pause before"],
+        event["Build before"],
+    )
+
+    opportunity = (
+        0.40 * event["Hit strength"]
+        +
+        0.20 * event["Beat alignment"]
+        +
+        0.25 * context_score
+        +
+        0.15 * distinctive_score
+    )
+
+    # Protect clearly distinctive upper-frequency attacks such as
+    # piano/guitar/synth stabs. They can be excellent edit points
+    # even when they are intentionally off the main beat grid.
+    if (
+        event["High / tonal"] >= 0.75
+        and
+        event["Hit strength"] >= 0.45
+    ):
+        opportunity = max(
+            opportunity,
+            0.50
+        )
+
+    return float(
+        np.clip(
+            opportunity,
+            0.0,
+            1.0
+        )
+    )
+
+
 def build_event_label(event):
     labels = []
 
@@ -918,13 +971,44 @@ def build_event_label(event):
     )
 
 
-def cluster_micro_hits(events, cluster_seconds=0.15):
+def refresh_event_ranking(event):
     """
-    Collapse only very close onset peaks that are likely to be
-    different measurements of the same musical attack.
+    Recalculate score, tier and labels whenever context changes.
+    """
 
-    Hits such as 16.3 s and 17.1 s remain separate because the
-    gap is much larger than 0.15 s.
+    event["Opportunity"] = (
+        calculate_event_opportunity(
+            event
+        )
+    )
+
+    event["Tier"] = (
+        get_event_tier(
+            event["Opportunity"]
+        )
+    )
+
+    event["Event"] = (
+        build_event_label(
+            event
+        )
+    )
+
+    return event
+
+
+def cluster_micro_hits(events, cluster_seconds=0.12):
+    """
+    Collapse only peaks that fit inside one small TOTAL time window.
+
+    Important: clustering is measured from the first event in the
+    cluster, not from the previous event. This prevents chain merging:
+
+        16.10 -> 16.20 -> 16.30 -> 16.40
+
+    With neighbour-to-neighbour clustering that entire sequence could
+    collapse even though it spans 0.30 s. With total-width clustering,
+    a cluster can never become wider than cluster_seconds.
     """
 
     if not events:
@@ -939,17 +1023,16 @@ def cluster_micro_hits(events, cluster_seconds=0.15):
     current_cluster = [
         events[0]
     ]
+    cluster_start_time = events[0]["Time"]
 
     for event in events[1:]:
-        previous_event = current_cluster[-1]
-
-        if (
+        total_cluster_width = (
             event["Time"]
             -
-            previous_event["Time"]
-            <=
-            cluster_seconds
-        ):
+            cluster_start_time
+        )
+
+        if total_cluster_width <= cluster_seconds:
             current_cluster.append(
                 event
             )
@@ -961,6 +1044,9 @@ def cluster_micro_hits(events, cluster_seconds=0.15):
             current_cluster = [
                 event
             ]
+            cluster_start_time = (
+                event["Time"]
+            )
 
     clusters.append(
         current_cluster
@@ -969,9 +1055,7 @@ def cluster_micro_hits(events, cluster_seconds=0.15):
     merged_events = []
 
     for cluster in clusters:
-        # Time comes from the most convincing attack in the
-        # micro-cluster, rather than averaging timing between
-        # separate peaks.
+        # Anchor timing to the strongest/most useful physical attack.
         anchor = max(
             cluster,
             key=lambda item: (
@@ -984,10 +1068,9 @@ def cluster_micro_hits(events, cluster_seconds=0.15):
             anchor
         )
 
-        # Preserve useful information found by neighbouring
-        # micro-peaks in the same attack.
+        # Preserve useful characteristics seen by neighbouring analysis
+        # frames that still belong to this same very short attack.
         for key in [
-            "Opportunity",
             "Hit strength",
             "Beat alignment",
             "Pause before",
@@ -1002,16 +1085,8 @@ def cluster_micro_hits(events, cluster_seconds=0.15):
                 in cluster
             )
 
-        merged["Tier"] = (
-            get_event_tier(
-                merged["Opportunity"]
-            )
-        )
-
-        merged["Event"] = (
-            build_event_label(
-                merged
-            )
+        refresh_event_ranking(
+            merged
         )
 
         merged_events.append(
@@ -1029,6 +1104,70 @@ def cluster_micro_hits(events, cluster_seconds=0.15):
         removed_count
     )
 
+
+def keep_first_post_pause_hit(events, suppression_seconds=1.75):
+    """
+    A pause is most editorially useful at the FIRST meaningful hit
+    after the quiet moment.
+
+    The pause detector can naturally remain elevated for several
+    following attacks because its look-back window still contains the
+    same silence. Treat those as one pause episode and keep the pause
+    bonus only on its first meaningful hit.
+
+    Raw hit/onset/bass/high information is untouched; only the repeated
+    pause context is removed, then the ranking is recalculated.
+    """
+
+    if not events:
+        return events, 0
+
+    events = sorted(
+        events,
+        key=lambda item: item["Time"]
+    )
+
+    last_kept_pause_time = None
+    suppressed_count = 0
+
+    for event in events:
+        is_pause_candidate = (
+            event["Pause before"] >= 0.45
+            and
+            event["Onset"] >= 0.35
+        )
+
+        if not is_pause_candidate:
+            continue
+
+        if last_kept_pause_time is None:
+            last_kept_pause_time = (
+                event["Time"]
+            )
+            continue
+
+        gap = (
+            event["Time"]
+            -
+            last_kept_pause_time
+        )
+
+        if gap <= suppression_seconds:
+            event["Pause before"] = 0.0
+            refresh_event_ranking(
+                event
+            )
+            suppressed_count += 1
+
+        else:
+            last_kept_pause_time = (
+                event["Time"]
+            )
+
+    return (
+        events,
+        suppressed_count
+    )
 
 def detect_song_events(
     analysis,
@@ -1135,31 +1274,6 @@ def detect_song_events(
             0.10 * energy_strength
         )
 
-        context_score = max(
-            pause_score,
-            build_context,
-        )
-
-        # This remains an analyzer/debugging score rather than
-        # the final Smart Edit cut-selection score.
-        opportunity = (
-            0.40 * hit_strength
-            +
-            0.20 * beat_alignment
-            +
-            0.25 * context_score
-            +
-            0.15 * distinctive_score
-        )
-
-        opportunity = float(
-            np.clip(
-                opportunity,
-                0.0,
-                1.0
-            )
-        )
-
         # Keep weaker real candidates for now. They can still
         # become useful in energetic passages later.
         if (
@@ -1171,7 +1285,6 @@ def detect_song_events(
 
         event = {
             "Time": event_time,
-            "Opportunity": opportunity,
             "Hit strength": hit_strength,
             "Beat alignment": beat_alignment,
             "Pause before": pause_score,
@@ -1181,26 +1294,30 @@ def detect_song_events(
             "Onset": onset_strength,
         }
 
-        event["Tier"] = (
-            get_event_tier(
-                opportunity
-            )
-        )
-
-        event["Event"] = (
-            build_event_label(
-                event
-            )
+        refresh_event_ranking(
+            event
         )
 
         raw_events.append(
             event
         )
 
+    # Only merge peaks that fit inside one genuinely tiny total
+    # window. This prevents chain-merging separate attacks.
     events, merged_count = (
         cluster_micro_hits(
             raw_events,
-            cluster_seconds=0.15
+            cluster_seconds=0.12
+        )
+    )
+
+    # The look-back pause window can remain elevated for several
+    # following attacks. Preserve the pause bonus only on the first
+    # meaningful hit in each short pause episode.
+    events, suppressed_pause_count = (
+        keep_first_post_pause_hit(
+            events,
+            suppression_seconds=1.75
         )
     )
 
@@ -1211,6 +1328,7 @@ def detect_song_events(
         ),
         len(raw_events),
         merged_count,
+        suppressed_pause_count,
     )
 
 
@@ -1512,6 +1630,7 @@ def show_song_analyzer(
         events,
         raw_event_count,
         merged_micro_hits,
+        suppressed_pause_hits,
     ) = (
         detect_song_events(
             analysis,
@@ -1579,6 +1698,12 @@ def show_song_analyzer(
         st.caption(
             f"Cleaned {merged_micro_hits} duplicate micro-hits "
             f"from {raw_event_count} raw onset candidates."
+        )
+
+    if suppressed_pause_hits > 0:
+        st.caption(
+            f"Kept post-pause context on the first meaningful hit and "
+            f"removed it from {suppressed_pause_hits} following hits."
         )
 
     # -----------------------------------------------------
@@ -1764,10 +1889,9 @@ def show_song_analyzer(
     )
 
     st.caption(
-        "Micro-peaks within 0.15 s are grouped into one attack. "
-        "PRIMARY and STRONG are the most interesting candidates; "
-        "SECONDARY and LOW are kept because they may matter later "
-        "for Smart Edit pacing."
+        "Only micro-peaks fitting inside one 0.12 s window are grouped into one attack. "
+        "Distinctive tonal hits are protected from being ranked LOW only because they are off-beat. "
+        "Post-pause context is kept on the first meaningful hit after the pause."
     )
 
     event_rows = []
