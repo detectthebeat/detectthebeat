@@ -899,6 +899,20 @@ def calculate_event_opportunity(event):
             0.50
         )
 
+    # Also protect genuinely loud/strong standalone attacks.
+    # A hit should not fall all the way to LOW just because it is
+    # between beats. This is the rule that keeps moments like the
+    # useful ~16.32 s hit in Heron Vale alive.
+    if (
+        event["Onset"] >= 0.78
+        and
+        event["Hit strength"] >= 0.65
+    ):
+        opportunity = max(
+            opportunity,
+            0.50
+        )
+
     return float(
         np.clip(
             opportunity,
@@ -1168,6 +1182,234 @@ def keep_first_post_pause_hit(events, suppression_seconds=1.75):
         events,
         suppressed_count
     )
+
+
+def calculate_local_prominence(
+    events,
+    window_seconds=0.65
+):
+    """
+    Measure how prominent each hit is compared with the nearby
+    musical activity.
+
+    A value near 1.0 means this event is one of the strongest hits
+    in its local neighbourhood. This lets us keep a useful off-grid
+    hit without treating every transient as equally important.
+    """
+
+    if not events:
+        return []
+
+    times = np.asarray(
+        [
+            event["Time"]
+            for event in events
+        ],
+        dtype=float
+    )
+
+    hit_strengths = np.asarray(
+        [
+            event["Hit strength"]
+            for event in events
+        ],
+        dtype=float
+    )
+
+    prominence = []
+
+    for index, event_time in enumerate(times):
+        local_mask = (
+            np.abs(
+                times - event_time
+            )
+            <=
+            window_seconds
+        )
+
+        local_max = float(
+            np.max(
+                hit_strengths[local_mask]
+            )
+        )
+
+        if local_max <= 0:
+            value = 0.0
+
+        else:
+            value = float(
+                hit_strengths[index]
+                /
+                local_max
+            )
+
+        prominence.append(
+            float(
+                np.clip(
+                    value,
+                    0.0,
+                    1.0
+                )
+            )
+        )
+
+    return prominence
+
+
+def build_editorial_candidates(events):
+    """
+    Turn the sensitive raw event map into a cleaner set of moments
+    that an editor is realistically likely to care about.
+
+    Nothing is deleted from the raw analyzer data. This is a second
+    layer on top of it. Smart Edit will later make the actual cut
+    decisions from these candidates.
+    """
+
+    if not events:
+        return []
+
+    events = sorted(
+        events,
+        key=lambda item: item["Time"]
+    )
+
+    local_prominence = (
+        calculate_local_prominence(
+            events,
+            window_seconds=0.65
+        )
+    )
+
+    candidates = []
+
+    for event, prominence in zip(
+        events,
+        local_prominence
+    ):
+        context_score = max(
+            event["Pause before"],
+            event["Build before"]
+        )
+
+        distinctive_score = max(
+            event["Bass"],
+            event["High / tonal"]
+        )
+
+        editorial_score = (
+            0.42 * event["Hit strength"]
+            +
+            0.18 * event["Beat alignment"]
+            +
+            0.18 * prominence
+            +
+            0.14 * context_score
+            +
+            0.08 * distinctive_score
+        )
+
+        editorial_score = float(
+            np.clip(
+                editorial_score,
+                0.0,
+                1.0
+            )
+        )
+
+        reasons = []
+
+        # First meaningful hit after silence/quiet is a high-value
+        # editorial opportunity.
+        if (
+            event["Pause before"] >= 0.45
+            and
+            event["Hit strength"] >= 0.40
+        ):
+            reasons.append(
+                "Post-pause"
+            )
+
+        # A release at the end of a real sustained build is similarly
+        # important.
+        if (
+            event["Build before"] >= 0.55
+            and
+            event["Hit strength"] >= 0.40
+        ):
+            reasons.append(
+                "Post-build"
+            )
+
+        # Protect distinctive upper-frequency musical notes even when
+        # they are not sitting directly on the main beat grid.
+        if (
+            event["High / tonal"] >= 0.75
+            and
+            event["Hit strength"] >= 0.50
+        ):
+            reasons.append(
+                "Distinct tonal hit"
+            )
+
+        # Big bass/kick events are commonly useful cut points.
+        if (
+            event["Bass"] >= 0.85
+            and
+            event["Hit strength"] >= 0.60
+        ):
+            reasons.append(
+                "Strong bass/kick"
+            )
+
+        # Loud standalone hits are kept when they are also prominent
+        # compared with the surrounding material. This prevents the
+        # filter from keeping every single loud transient.
+        if (
+            event["Onset"] >= 0.78
+            and
+            event["Hit strength"] >= 0.65
+            and
+            prominence >= 0.80
+        ):
+            reasons.append(
+                "Prominent strong hit"
+            )
+
+        # General editorial score catches well-balanced events that
+        # may not trigger one of the special rules above.
+        if editorial_score >= 0.64:
+            reasons.append(
+                "Strong overall candidate"
+            )
+
+        if not reasons:
+            continue
+
+        candidate = dict(
+            event
+        )
+
+        candidate["Local prominence"] = (
+            prominence
+        )
+
+        candidate["Editorial score"] = (
+            editorial_score
+        )
+
+        candidate["Candidate reason"] = (
+            " + ".join(
+                reasons
+            )
+        )
+
+        candidates.append(
+            candidate
+        )
+
+    return candidates
+
 
 def detect_song_events(
     analysis,
@@ -1639,6 +1881,12 @@ def show_song_analyzer(
         )
     )
 
+    editorial_candidates = (
+        build_editorial_candidates(
+            events
+        )
+    )
+
     beat_times = analysis[
         "beat_times"
     ]
@@ -1668,8 +1916,8 @@ def show_song_analyzer(
         "Song analysis complete."
     )
 
-    metric1, metric2, metric3 = (
-        st.columns(3)
+    metric1, metric2, metric3, metric4 = (
+        st.columns(4)
     )
 
     with metric1:
@@ -1690,8 +1938,14 @@ def show_song_analyzer(
 
     with metric3:
         st.metric(
-            "Musical events",
+            "Raw events",
             len(events)
+        )
+
+    with metric4:
+        st.metric(
+            "Editorial candidates",
+            len(editorial_candidates)
         )
 
     if merged_micro_hits > 0:
@@ -1881,23 +2135,24 @@ def show_song_analyzer(
         )
 
     # -----------------------------------------------------
-    # EVENT TABLE
+    # EDITORIAL CANDIDATES
     # -----------------------------------------------------
 
     st.subheader(
-        "Detected musical events"
+        "Editorial candidates"
     )
 
     st.caption(
-        "Only micro-peaks fitting inside one 0.12 s window are grouped into one attack. "
-        "Distinctive tonal hits are protected from being ranked LOW only because they are off-beat. "
-        "Post-pause context is kept on the first meaningful hit after the pause."
+        "The raw analyzer remains sensitive, but this second layer keeps the moments "
+        "most likely to matter in an edit: strong/prominent hits, post-pause and post-build "
+        "events, strong bass/kick hits, distinctive tonal notes and other well-balanced candidates. "
+        "These are still opportunities, not automatic Smart Edit cuts."
     )
 
-    event_rows = []
+    candidate_rows = []
 
-    for event in events:
-        event_rows.append(
+    for event in editorial_candidates:
+        candidate_rows.append(
             {
                 "Song": song_name,
                 "Time": format_time(
@@ -1913,12 +2168,23 @@ def show_song_analyzer(
                 "Event": event[
                     "Event"
                 ],
+                "Candidate reason": event[
+                    "Candidate reason"
+                ],
+                "Editorial score": round(
+                    event["Editorial score"],
+                    2
+                ),
                 "Opportunity": round(
                     event["Opportunity"],
                     2
                 ),
                 "Hit": round(
                     event["Hit strength"],
+                    2
+                ),
+                "Prominence": round(
+                    event["Local prominence"],
                     2
                 ),
                 "Beat": round(
@@ -1944,22 +2210,22 @@ def show_song_analyzer(
             }
         )
 
-    event_dataframe = (
+    candidate_dataframe = (
         pd.DataFrame(
-            event_rows
+            candidate_rows
         )
     )
 
     st.dataframe(
-        event_dataframe,
+        candidate_dataframe,
         use_container_width=True,
         hide_index=True,
         height=500,
     )
 
-    if not event_dataframe.empty:
-        csv_bytes = (
-            event_dataframe
+    if not candidate_dataframe.empty:
+        candidate_csv_bytes = (
+            candidate_dataframe
             .to_csv(
                 index=False
             )
@@ -1968,7 +2234,7 @@ def show_song_analyzer(
             )
         )
 
-        csv_filename = (
+        candidate_csv_filename = (
             f"{song_name}_"
             f"DetectTheBeat_"
             f"SongAnalysis.csv"
@@ -1976,12 +2242,113 @@ def show_song_analyzer(
 
         st.download_button(
             "Download analysis CSV",
-            data=csv_bytes,
+            data=candidate_csv_bytes,
             file_name=(
-                csv_filename
+                candidate_csv_filename
             ),
             mime="text/csv",
         )
+
+    # -----------------------------------------------------
+    # RAW EVENT MAP
+    # -----------------------------------------------------
+
+    with st.expander(
+        f"Raw event map ({len(events)} events)"
+    ):
+        st.caption(
+            "This is the sensitive underlying event map. Nothing here is deleted from the "
+            "analysis; the Editorial Candidate layer simply selects the more useful subset."
+        )
+
+        raw_rows = []
+
+        for event in events:
+            raw_rows.append(
+                {
+                    "Song": song_name,
+                    "Time": format_time(
+                        event["Time"]
+                    ),
+                    "Seconds": round(
+                        event["Time"],
+                        3
+                    ),
+                    "Tier": event[
+                        "Tier"
+                    ],
+                    "Event": event[
+                        "Event"
+                    ],
+                    "Opportunity": round(
+                        event["Opportunity"],
+                        2
+                    ),
+                    "Hit": round(
+                        event["Hit strength"],
+                        2
+                    ),
+                    "Beat": round(
+                        event["Beat alignment"],
+                        2
+                    ),
+                    "Pause": round(
+                        event["Pause before"],
+                        2
+                    ),
+                    "Build": round(
+                        event["Build before"],
+                        2
+                    ),
+                    "Bass": round(
+                        event["Bass"],
+                        2
+                    ),
+                    "High": round(
+                        event["High / tonal"],
+                        2
+                    ),
+                }
+            )
+
+        raw_dataframe = (
+            pd.DataFrame(
+                raw_rows
+            )
+        )
+
+        st.dataframe(
+            raw_dataframe,
+            use_container_width=True,
+            hide_index=True,
+            height=400,
+        )
+
+        if not raw_dataframe.empty:
+            raw_csv_bytes = (
+                raw_dataframe
+                .to_csv(
+                    index=False
+                )
+                .encode(
+                    "utf-8"
+                )
+            )
+
+            raw_csv_filename = (
+                f"{song_name}_"
+                f"DetectTheBeat_"
+                f"RawEvents.csv"
+            )
+
+            st.download_button(
+                "Download raw events CSV",
+                data=raw_csv_bytes,
+                file_name=(
+                    raw_csv_filename
+                ),
+                mime="text/csv",
+            )
 
 
 # =========================================================
