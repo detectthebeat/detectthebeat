@@ -27,17 +27,11 @@ INTERNAL_WIDTH = 64
 INTERNAL_HEIGHT = 36
 HOP_LENGTH = 512
 PHRASE_BEATS = 16
-SWITCH_MARGIN = 0.10
+SWITCH_MARGIN = 0.1
 
 FPS_OPTIONS = {
-    "25 fps": {
-        "value": 25.0,
-        "ffmpeg": "25",
-    },
-    "23.976 fps": {
-        "value": 24000 / 1001,
-        "ffmpeg": "24000/1001",
-    },
+    "25 fps": {"value": 25.0, "ffmpeg": "25"},
+    "23.976 fps": {"value": 24000 / 1001, "ffmpeg": "24000/1001"},
 }
 
 BEAT_INTERVALS = {
@@ -187,25 +181,6 @@ def make_output_filename(
     )
 
 
-def sanitize_song_name(
-    original_name,
-):
-    song_name = Path(
-        original_name
-    ).stem
-
-    song_name = re.sub(
-        r'[<>:"/\\|?*]',
-        "",
-        song_name,
-    ).strip()
-
-    if not song_name:
-        song_name = "Song"
-
-    return song_name
-
-
 def create_solid_frame(
     width,
     height,
@@ -213,10 +188,7 @@ def create_solid_frame(
 ):
     return (
         bytes(color)
-        * (
-            width
-            * height
-        )
+        * (width * height)
     )
 
 
@@ -296,9 +268,7 @@ PATTERN_B_FRAME = (
 )
 
 
-def normalize_feature(
-    values,
-):
+def normalize_feature(values):
     values = np.asarray(
         values,
         dtype=float,
@@ -323,11 +293,9 @@ def normalize_feature(
         )
 
     normalized = (
-        values
-        - low
+        values - low
     ) / (
-        high
-        - low
+        high - low
     )
 
     return np.clip(
@@ -458,21 +426,17 @@ def rising_trend(
         window_frames // 2,
     )
 
-    smoothed = (
-        moving_average(
-            values,
-            max(
-                2,
-                half // 4,
-            ),
-        )
+    smoothed = moving_average(
+        values,
+        max(
+            2,
+            half // 4,
+        ),
     )
 
-    recent = (
-        moving_average(
-            smoothed,
-            half,
-        )
+    recent = moving_average(
+        smoothed,
+        half,
     )
 
     previous = np.roll(
@@ -1111,6 +1075,7 @@ def select_phrase_locked_beats(
             cleaned.append(
                 record
             )
+
             continue
 
         previous = (
@@ -1244,6 +1209,54 @@ def calculate_band_activity(
     )
 
 
+def robust_standardize_matrix(matrix):
+    matrix = np.asarray(
+        matrix,
+        dtype=float,
+    )
+
+    if (
+        matrix.ndim != 2
+        or matrix.size == 0
+    ):
+        return matrix
+
+    center = np.median(
+        matrix,
+        axis=1,
+        keepdims=True,
+    )
+
+    low = np.percentile(
+        matrix,
+        10,
+        axis=1,
+        keepdims=True,
+    )
+
+    high = np.percentile(
+        matrix,
+        90,
+        axis=1,
+        keepdims=True,
+    )
+
+    scale = np.maximum(
+        high - low,
+        1e-6,
+    )
+
+    standardized = (
+        matrix - center
+    ) / scale
+
+    return np.clip(
+        standardized,
+        -3.0,
+        3.0,
+    )
+
+
 def build_song_analysis(
     y,
     sr,
@@ -1264,7 +1277,7 @@ def build_song_analysis(
         onset
     )
 
-    rms = (
+    rms_raw = (
         librosa.feature.rms(
             y=y,
             frame_length=2048,
@@ -1272,14 +1285,18 @@ def build_song_analysis(
         )[0]
     )
 
-    rms = normalize_feature(
+    rms_raw = (
         match_feature_length(
-            rms,
+            rms_raw,
             target_length,
         )
     )
 
-    brightness = (
+    rms = normalize_feature(
+        rms_raw
+    )
+
+    brightness_raw = (
         librosa.feature.spectral_centroid(
             y=y,
             sr=sr,
@@ -1288,10 +1305,16 @@ def build_song_analysis(
         )[0]
     )
 
-    brightness = normalize_feature(
+    brightness_raw = (
         match_feature_length(
-            brightness,
+            brightness_raw,
             target_length,
+        )
+    )
+
+    brightness = (
+        normalize_feature(
+            brightness_raw
         )
     )
 
@@ -1314,6 +1337,99 @@ def build_song_analysis(
         match_feature_length(
             high_hit,
             target_length,
+        )
+    )
+
+    chroma = (
+        librosa.feature.chroma_stft(
+            y=y,
+            sr=sr,
+            n_fft=2048,
+            hop_length=HOP_LENGTH,
+        )
+    )
+
+    if (
+        chroma.shape[1]
+        != target_length
+    ):
+        if (
+            chroma.shape[1]
+            > target_length
+        ):
+            chroma = (
+                chroma[
+                    :,
+                    :target_length
+                ]
+            )
+
+        else:
+            pad = (
+                target_length
+                - chroma.shape[1]
+            )
+
+            chroma = np.pad(
+                chroma,
+                (
+                    (
+                        0,
+                        0,
+                    ),
+                    (
+                        0,
+                        pad,
+                    ),
+                ),
+                mode="edge",
+            )
+
+    mfcc = librosa.feature.mfcc(
+        y=y,
+        sr=sr,
+        n_mfcc=13,
+        n_fft=2048,
+        hop_length=HOP_LENGTH,
+    )
+
+    if (
+        mfcc.shape[1]
+        != target_length
+    ):
+        if (
+            mfcc.shape[1]
+            > target_length
+        ):
+            mfcc = mfcc[
+                :,
+                :target_length
+            ]
+
+        else:
+            pad = (
+                target_length
+                - mfcc.shape[1]
+            )
+
+            mfcc = np.pad(
+                mfcc,
+                (
+                    (
+                        0,
+                        0,
+                    ),
+                    (
+                        0,
+                        pad,
+                    ),
+                ),
+                mode="edge",
+            )
+
+    mfcc = (
+        robust_standardize_matrix(
+            mfcc
         )
     )
 
@@ -1456,13 +1572,17 @@ def build_song_analysis(
         "onset": onset,
         "onset_raw": onset_envelope,
         "rms": rms,
+        "rms_raw": rms_raw,
         "brightness": brightness,
+        "brightness_raw": brightness_raw,
         "bass_hit": bass_hit,
         "high_hit": high_hit,
         "onset_density": onset_density,
         "build_score": build_score,
         "beat_times": beat_times,
         "beat_pulse": beat_pulse,
+        "chroma": chroma,
+        "mfcc": mfcc,
     }
 
 
@@ -1707,7 +1827,7 @@ def calculate_event_opportunity(
         and event[
             "Hit strength"
         ]
-        >= 0.64
+        >= 0.65
     ):
         opportunity = max(
             opportunity,
@@ -2366,14 +2486,10 @@ def detect_song_events(
         )
 
         hit_strength = (
-            0.60
-            * onset_strength
-            + 0.15
-            * bass_strength
-            + 0.15
-            * high_strength
-            + 0.10
-            * energy_strength
+            0.60 * onset_strength
+            + 0.15 * bass_strength
+            + 0.15 * high_strength
+            + 0.10 * energy_strength
         )
 
         if (
@@ -2666,8 +2782,7 @@ def detect_build_regions(
         )
 
         peak_index = (
-            start
-            + peak_local
+            start + peak_local
         )
 
         rise_bonus = np.clip(
@@ -2731,6 +2846,25 @@ def detect_build_regions(
         )
 
     return regions
+
+
+def sanitize_song_name(
+    original_name,
+):
+    song_name = Path(
+        original_name
+    ).stem
+
+    song_name = re.sub(
+        r'[<>:"/\\|?*]',
+        "",
+        song_name,
+    ).strip()
+
+    if not song_name:
+        song_name = "Song"
+
+    return song_name
 
 
 def show_song_analyzer(
@@ -2897,8 +3031,8 @@ def show_song_analyzer(
     st.caption(
         "Overall onset = general attacks. "
         "Bass = kick/low-frequency attacks. "
-        "High/Tonal = piano, guitar, cymbal, "
-        "synth and other brighter attacks. "
+        "High/Tonal = piano, guitar, cymbal, synth "
+        "and other brighter attacks. "
         "Beat spikes show the detected beat grid."
     )
 
@@ -2937,10 +3071,9 @@ def show_song_analyzer(
     )
 
     st.caption(
-        "The curve shows possible rising musical "
-        "activity. A region is only labelled as "
-        "a build when the rise is sustained and "
-        "several signals increase together."
+        "The curve shows possible rising musical activity. "
+        "A region is only labelled as a build when the rise "
+        "is sustained and several signals increase together."
     )
 
     build_dataframe = (
@@ -3032,11 +3165,8 @@ def show_song_analyzer(
     )
 
     st.caption(
-        "The raw analyzer remains sensitive, "
-        "but this second layer keeps the moments "
-        "most likely to matter in an edit. "
-        "These are still opportunities, not "
-        "automatic Smart Edit cuts."
+        "The raw analyzer remains sensitive, but this second layer "
+        "keeps the moments most likely to matter in an edit."
     )
 
     candidate_rows = []
@@ -3269,6 +3399,2204 @@ def show_song_analyzer(
             )
 
 
+def safe_cosine_distance(
+    vector_a,
+    vector_b,
+):
+    vector_a = np.asarray(
+        vector_a,
+        dtype=float,
+    )
+
+    vector_b = np.asarray(
+        vector_b,
+        dtype=float,
+    )
+
+    if (
+        vector_a.size == 0
+        or vector_b.size == 0
+    ):
+        return 0.0
+
+    denominator = (
+        np.linalg.norm(
+            vector_a
+        )
+        * np.linalg.norm(
+            vector_b
+        )
+    )
+
+    if denominator <= 1e-9:
+        return 0.0
+
+    similarity = float(
+        np.dot(
+            vector_a,
+            vector_b,
+        )
+        / denominator
+    )
+
+    return float(
+        np.clip(
+            1.0 - similarity,
+            0.0,
+            1.0,
+        )
+    )
+
+
+def robust_relative_normalize(
+    values,
+    low_percentile=20,
+    high_percentile=90,
+):
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+
+    if len(values) == 0:
+        return values
+
+    low = float(
+        np.percentile(
+            values,
+            low_percentile,
+        )
+    )
+
+    high = float(
+        np.percentile(
+            values,
+            high_percentile,
+        )
+    )
+
+    if (
+        high
+        <= low + 1e-9
+    ):
+        return np.zeros_like(
+            values
+        )
+
+    normalized = (
+        values - low
+    ) / (
+        high - low
+    )
+
+    return np.clip(
+        normalized,
+        0.0,
+        1.0,
+    )
+
+
+def mean_window(
+    values,
+    start,
+    end,
+):
+    start = max(
+        0,
+        int(start),
+    )
+
+    end = min(
+        len(values),
+        int(end),
+    )
+
+    if end <= start:
+        return 0.0
+
+    return float(
+        np.mean(
+            values[
+                start:end
+            ]
+        )
+    )
+
+
+def feature_mean_window(
+    matrix,
+    start,
+    end,
+):
+    start = max(
+        0,
+        int(start),
+    )
+
+    end = min(
+        matrix.shape[1],
+        int(end),
+    )
+
+    if end <= start:
+        return np.zeros(
+            matrix.shape[0],
+            dtype=float,
+        )
+
+    return np.mean(
+        matrix[
+            :,
+            start:end
+        ],
+        axis=1,
+    )
+
+
+def autocorrelation_at_lag(
+    values,
+    lag,
+):
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+
+    lag = int(
+        round(
+            lag
+        )
+    )
+
+    if (
+        lag <= 0
+        or len(values)
+        <= lag + 2
+    ):
+        return 0.0
+
+    left = values[
+        :-lag
+    ]
+
+    right = values[
+        lag:
+    ]
+
+    left = (
+        left
+        - np.mean(left)
+    )
+
+    right = (
+        right
+        - np.mean(right)
+    )
+
+    denominator = (
+        np.linalg.norm(left)
+        * np.linalg.norm(right)
+    )
+
+    if denominator <= 1e-9:
+        return 0.0
+
+    return float(
+        np.clip(
+            np.dot(
+                left,
+                right,
+            )
+            / denominator,
+            -1.0,
+            1.0,
+        )
+    )
+
+
+def rhythm_signature(
+    values,
+    beat_period_frames,
+):
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+
+    if len(values) < 8:
+        return np.zeros(
+            3,
+            dtype=float,
+        )
+
+    lags = [
+        max(
+            1,
+            beat_period_frames
+            * 0.5,
+        ),
+        max(
+            1,
+            beat_period_frames,
+        ),
+        max(
+            1,
+            beat_period_frames
+            * 2.0,
+        ),
+    ]
+
+    return np.asarray(
+        [
+            autocorrelation_at_lag(
+                values,
+                lag,
+            )
+            for lag
+            in lags
+        ],
+        dtype=float,
+    )
+
+
+def calculate_structural_raw_features(
+    event_time,
+    analysis,
+    sr,
+    beat_period,
+):
+    frames_per_second = (
+        sr / HOP_LENGTH
+    )
+
+    frame = int(
+        round(
+            event_time
+            * frames_per_second
+        )
+    )
+
+    compare_window = max(
+        6,
+        int(
+            round(
+                1.35
+                * frames_per_second
+            )
+        ),
+    )
+
+    event_margin = max(
+        2,
+        int(
+            round(
+                0.12
+                * frames_per_second
+            )
+        ),
+    )
+
+    pre_start = max(
+        0,
+        frame
+        - event_margin
+        - compare_window,
+    )
+
+    pre_end = max(
+        0,
+        frame
+        - event_margin,
+    )
+
+    post_start = min(
+        len(
+            analysis[
+                "onset"
+            ]
+        ),
+        frame
+        + event_margin,
+    )
+
+    post_end = min(
+        len(
+            analysis[
+                "onset"
+            ]
+        ),
+        frame
+        + event_margin
+        + compare_window,
+    )
+
+    minimum_frames = max(
+        4,
+        int(
+            round(
+                0.45
+                * frames_per_second
+            )
+        ),
+    )
+
+    if (
+        pre_end - pre_start
+        < minimum_frames
+        or post_end - post_start
+        < minimum_frames
+    ):
+        return {
+            "Tonal change raw": 0.0,
+            "Timbre change raw": 0.0,
+            "Rhythm change raw": 0.0,
+            "Dynamics change raw": 0.0,
+        }
+
+    pre_chroma = (
+        feature_mean_window(
+            analysis[
+                "chroma"
+            ],
+            pre_start,
+            pre_end,
+        )
+    )
+
+    post_chroma = (
+        feature_mean_window(
+            analysis[
+                "chroma"
+            ],
+            post_start,
+            post_end,
+        )
+    )
+
+    tonal_change = (
+        safe_cosine_distance(
+            pre_chroma,
+            post_chroma,
+        )
+    )
+
+    pre_mfcc = (
+        feature_mean_window(
+            analysis[
+                "mfcc"
+            ],
+            pre_start,
+            pre_end,
+        )
+    )
+
+    post_mfcc = (
+        feature_mean_window(
+            analysis[
+                "mfcc"
+            ],
+            post_start,
+            post_end,
+        )
+    )
+
+    timbre_change = float(
+        np.clip(
+            np.mean(
+                np.abs(
+                    post_mfcc
+                    - pre_mfcc
+                )
+            )
+            / 1.5,
+            0.0,
+            1.0,
+        )
+    )
+
+    beat_period_frames = max(
+        2,
+        beat_period
+        * frames_per_second,
+    )
+
+    pre_onset = analysis[
+        "onset"
+    ][
+        pre_start:pre_end
+    ]
+
+    post_onset = analysis[
+        "onset"
+    ][
+        post_start:post_end
+    ]
+
+    pre_signature = (
+        rhythm_signature(
+            pre_onset,
+            beat_period_frames,
+        )
+    )
+
+    post_signature = (
+        rhythm_signature(
+            post_onset,
+            beat_period_frames,
+        )
+    )
+
+    autocorrelation_change = float(
+        np.mean(
+            np.abs(
+                post_signature
+                - pre_signature
+            )
+        )
+        / 2.0
+    )
+
+    density_change = abs(
+        mean_window(
+            analysis[
+                "onset_density"
+            ],
+            post_start,
+            post_end,
+        )
+        - mean_window(
+            analysis[
+                "onset_density"
+            ],
+            pre_start,
+            pre_end,
+        )
+    )
+
+    rhythm_change = float(
+        np.clip(
+            0.70
+            * autocorrelation_change
+            + 0.30
+            * density_change,
+            0.0,
+            1.0,
+        )
+    )
+
+    energy_change = abs(
+        mean_window(
+            analysis[
+                "rms"
+            ],
+            post_start,
+            post_end,
+        )
+        - mean_window(
+            analysis[
+                "rms"
+            ],
+            pre_start,
+            pre_end,
+        )
+    )
+
+    brightness_change = abs(
+        mean_window(
+            analysis[
+                "brightness"
+            ],
+            post_start,
+            post_end,
+        )
+        - mean_window(
+            analysis[
+                "brightness"
+            ],
+            pre_start,
+            pre_end,
+        )
+    )
+
+    dynamics_change = float(
+        np.clip(
+            0.60
+            * energy_change
+            + 0.40
+            * brightness_change,
+            0.0,
+            1.0,
+        )
+    )
+
+    return {
+        "Tonal change raw": tonal_change,
+        "Timbre change raw": timbre_change,
+        "Rhythm change raw": rhythm_change,
+        "Dynamics change raw": dynamics_change,
+    }
+
+
+def calculate_long_quiet_before(
+    analysis,
+    event_time,
+    sr,
+):
+    frames_per_second = (
+        sr / HOP_LENGTH
+    )
+
+    frame = int(
+        round(
+            event_time
+            * frames_per_second
+        )
+    )
+
+    immediate = max(
+        4,
+        int(
+            round(
+                1.4
+                * frames_per_second
+            )
+        ),
+    )
+
+    earlier = max(
+        8,
+        int(
+            round(
+                3.0
+                * frames_per_second
+            )
+        ),
+    )
+
+    immediate_start = max(
+        0,
+        frame
+        - immediate,
+    )
+
+    earlier_start = max(
+        0,
+        immediate_start
+        - earlier,
+    )
+
+    immediate_energy = (
+        mean_window(
+            analysis[
+                "rms"
+            ],
+            immediate_start,
+            frame,
+        )
+    )
+
+    earlier_energy = (
+        mean_window(
+            analysis[
+                "rms"
+            ],
+            earlier_start,
+            immediate_start,
+        )
+    )
+
+    immediate_activity = (
+        mean_window(
+            analysis[
+                "onset_density"
+            ],
+            immediate_start,
+            frame,
+        )
+    )
+
+    earlier_activity = (
+        mean_window(
+            analysis[
+                "onset_density"
+            ],
+            earlier_start,
+            immediate_start,
+        )
+    )
+
+    score = (
+        2.0
+        * max(
+            0.0,
+            earlier_energy
+            - immediate_energy,
+        )
+        + 1.5
+        * max(
+            0.0,
+            earlier_activity
+            - immediate_activity,
+        )
+    )
+
+    if immediate_energy < 0.22:
+        score += 0.14
+
+    if immediate_activity < 0.22:
+        score += 0.10
+
+    return float(
+        np.clip(
+            score,
+            0.0,
+            1.0,
+        )
+    )
+
+
+def calculate_quiet_after_hit(
+    analysis,
+    event_time,
+    sr,
+):
+    frames_per_second = (
+        sr / HOP_LENGTH
+    )
+
+    frame = int(
+        round(
+            event_time
+            * frames_per_second
+        )
+    )
+
+    before_window = max(
+        5,
+        int(
+            round(
+                1.4
+                * frames_per_second
+            )
+        ),
+    )
+
+    after_margin = max(
+        2,
+        int(
+            round(
+                0.16
+                * frames_per_second
+            )
+        ),
+    )
+
+    after_window = max(
+        5,
+        int(
+            round(
+                1.35
+                * frames_per_second
+            )
+        ),
+    )
+
+    before_start = max(
+        0,
+        frame
+        - before_window,
+    )
+
+    after_start = min(
+        len(
+            analysis[
+                "rms"
+            ]
+        ),
+        frame
+        + after_margin,
+    )
+
+    after_end = min(
+        len(
+            analysis[
+                "rms"
+            ]
+        ),
+        after_start
+        + after_window,
+    )
+
+    before_energy = (
+        mean_window(
+            analysis[
+                "rms"
+            ],
+            before_start,
+            frame,
+        )
+    )
+
+    after_energy = (
+        mean_window(
+            analysis[
+                "rms"
+            ],
+            after_start,
+            after_end,
+        )
+    )
+
+    before_activity = (
+        mean_window(
+            analysis[
+                "onset_density"
+            ],
+            before_start,
+            frame,
+        )
+    )
+
+    after_activity = (
+        mean_window(
+            analysis[
+                "onset_density"
+            ],
+            after_start,
+            after_end,
+        )
+    )
+
+    score = (
+        2.2
+        * max(
+            0.0,
+            before_energy
+            - after_energy,
+        )
+        + 1.7
+        * max(
+            0.0,
+            before_activity
+            - after_activity,
+        )
+    )
+
+    if after_energy < 0.22:
+        score += 0.12
+
+    if after_activity < 0.22:
+        score += 0.12
+
+    return float(
+        np.clip(
+            score,
+            0.0,
+            1.0,
+        )
+    )
+
+
+def calculate_burst_payoff(
+    analysis,
+    event_time,
+    sr,
+):
+    frames_per_second = (
+        sr / HOP_LENGTH
+    )
+
+    frame = int(
+        round(
+            event_time
+            * frames_per_second
+        )
+    )
+
+    pre_window = max(
+        8,
+        int(
+            round(
+                2.5
+                * frames_per_second
+            )
+        ),
+    )
+
+    post_margin = max(
+        2,
+        int(
+            round(
+                0.15
+                * frames_per_second
+            )
+        ),
+    )
+
+    post_window = max(
+        5,
+        int(
+            round(
+                1.25
+                * frames_per_second
+            )
+        ),
+    )
+
+    pre_start = max(
+        0,
+        frame
+        - pre_window,
+    )
+
+    post_start = min(
+        len(
+            analysis[
+                "onset_density"
+            ]
+        ),
+        frame
+        + post_margin,
+    )
+
+    post_end = min(
+        len(
+            analysis[
+                "onset_density"
+            ]
+        ),
+        post_start
+        + post_window,
+    )
+
+    pre_activity = (
+        mean_window(
+            analysis[
+                "onset_density"
+            ],
+            pre_start,
+            frame,
+        )
+    )
+
+    post_activity = (
+        mean_window(
+            analysis[
+                "onset_density"
+            ],
+            post_start,
+            post_end,
+        )
+    )
+
+    drop = max(
+        0.0,
+        pre_activity
+        - post_activity,
+    )
+
+    score = (
+        0.45
+        * pre_activity
+        + 0.55
+        * np.clip(
+            drop * 2.2,
+            0.0,
+            1.0,
+        )
+    )
+
+    return float(
+        np.clip(
+            score,
+            0.0,
+            1.0,
+        )
+    )
+
+
+def calculate_directional_gap_scores(
+    candidates,
+):
+    if not candidates:
+        return (
+            [],
+            [],
+        )
+
+    times = np.asarray(
+        [
+            event["Time"]
+            for event
+            in candidates
+        ],
+        dtype=float,
+    )
+
+    substantial = np.asarray(
+        [
+            (
+                event[
+                    "Hit strength"
+                ]
+                >= 0.62
+                and event[
+                    "Local prominence"
+                ]
+                >= 0.78
+            )
+            or event[
+                "Pause before"
+            ]
+            >= 0.45
+            or event[
+                "Build before"
+            ]
+            >= 0.55
+            for event
+            in candidates
+        ],
+        dtype=bool,
+    )
+
+    before_scores = []
+    after_scores = []
+
+    for (
+        index,
+        event_time,
+    ) in enumerate(
+        times
+    ):
+        earlier = times[
+            (
+                times
+                < event_time
+                - 0.12
+            )
+            & substantial
+        ]
+
+        later = times[
+            (
+                times
+                > event_time
+                + 0.12
+            )
+            & substantial
+        ]
+
+        if len(earlier) == 0:
+            before_gap = 4.0
+
+        else:
+            before_gap = (
+                event_time
+                - float(
+                    np.max(
+                        earlier
+                    )
+                )
+            )
+
+        if len(later) == 0:
+            after_gap = 4.0
+
+        else:
+            after_gap = (
+                float(
+                    np.min(
+                        later
+                    )
+                )
+                - event_time
+            )
+
+        before_score = float(
+            np.clip(
+                (
+                    before_gap
+                    - 0.35
+                )
+                / 3.0,
+                0.0,
+                1.0,
+            )
+        )
+
+        after_score = float(
+            np.clip(
+                (
+                    after_gap
+                    - 0.35
+                )
+                / 3.0,
+                0.0,
+                1.0,
+            )
+        )
+
+        before_scores.append(
+            before_score
+        )
+
+        after_scores.append(
+            after_score
+        )
+
+    return (
+        before_scores,
+        after_scores,
+    )
+
+
+def calculate_anchor_v2_candidates(
+    editorial_candidates,
+    analysis,
+    sr,
+):
+    if not editorial_candidates:
+        return []
+
+    candidates = sorted(
+        [
+            dict(
+                event
+            )
+            for event
+            in editorial_candidates
+        ],
+        key=lambda item: item[
+            "Time"
+        ],
+    )
+
+    beat_times = analysis[
+        "beat_times"
+    ]
+
+    beat_period = (
+        get_median_beat_period(
+            beat_times
+        )
+    )
+
+    raw_structural = []
+
+    for event in candidates:
+        raw = (
+            calculate_structural_raw_features(
+                event["Time"],
+                analysis,
+                sr,
+                beat_period,
+            )
+        )
+
+        raw_structural.append(
+            raw
+        )
+
+    tonal_relative = (
+        robust_relative_normalize(
+            [
+                item[
+                    "Tonal change raw"
+                ]
+                for item
+                in raw_structural
+            ]
+        )
+    )
+
+    timbre_relative = (
+        robust_relative_normalize(
+            [
+                item[
+                    "Timbre change raw"
+                ]
+                for item
+                in raw_structural
+            ]
+        )
+    )
+
+    rhythm_relative = (
+        robust_relative_normalize(
+            [
+                item[
+                    "Rhythm change raw"
+                ]
+                for item
+                in raw_structural
+            ]
+        )
+    )
+
+    dynamics_relative = (
+        robust_relative_normalize(
+            [
+                item[
+                    "Dynamics change raw"
+                ]
+                for item
+                in raw_structural
+            ]
+        )
+    )
+
+    (
+        before_gap_scores,
+        after_gap_scores,
+    ) = (
+        calculate_directional_gap_scores(
+            candidates
+        )
+    )
+
+    output = []
+
+    for (
+        index,
+        event,
+    ) in enumerate(
+        candidates
+    ):
+        tonal_change = float(
+            tonal_relative[
+                index
+            ]
+        )
+
+        timbre_change = float(
+            timbre_relative[
+                index
+            ]
+        )
+
+        rhythm_change = float(
+            rhythm_relative[
+                index
+            ]
+        )
+
+        dynamics_change = float(
+            dynamics_relative[
+                index
+            ]
+        )
+
+        structural_novelty = float(
+            np.clip(
+                0.38
+                * tonal_change
+                + 0.28
+                * timbre_change
+                + 0.20
+                * rhythm_change
+                + 0.14
+                * dynamics_change,
+                0.0,
+                1.0,
+            )
+        )
+
+        long_quiet_before = (
+            calculate_long_quiet_before(
+                analysis,
+                event[
+                    "Time"
+                ],
+                sr,
+            )
+        )
+
+        quiet_after = (
+            calculate_quiet_after_hit(
+                analysis,
+                event[
+                    "Time"
+                ],
+                sr,
+            )
+        )
+
+        burst_payoff = (
+            calculate_burst_payoff(
+                analysis,
+                event[
+                    "Time"
+                ],
+                sr,
+            )
+        )
+
+        before_gap = (
+            before_gap_scores[
+                index
+            ]
+        )
+
+        after_gap = (
+            after_gap_scores[
+                index
+            ]
+        )
+
+        distinctive = max(
+            event["Bass"],
+            event[
+                "High / tonal"
+            ],
+        )
+
+        musical_quality = float(
+            np.clip(
+                0.30
+                * event[
+                    "Hit strength"
+                ]
+                + 0.24
+                * event[
+                    "Local prominence"
+                ]
+                + 0.18
+                * event[
+                    "Beat alignment"
+                ]
+                + 0.14
+                * distinctive
+                + 0.14
+                * event[
+                    "Editorial score"
+                ],
+                0.0,
+                1.0,
+            )
+        )
+
+        change_path = float(
+            np.clip(
+                0.46
+                * structural_novelty
+                + 0.20
+                * event[
+                    "Hit strength"
+                ]
+                + 0.12
+                * event[
+                    "Local prominence"
+                ]
+                + 0.10
+                * event[
+                    "Beat alignment"
+                ]
+                + 0.12
+                * max(
+                    before_gap,
+                    after_gap,
+                ),
+                0.0,
+                1.0,
+            )
+        )
+
+        release_path = float(
+            np.clip(
+                0.34
+                * max(
+                    event[
+                        "Pause before"
+                    ],
+                    long_quiet_before,
+                )
+                + 0.22
+                * event[
+                    "Hit strength"
+                ]
+                + 0.16
+                * event[
+                    "Local prominence"
+                ]
+                + 0.10
+                * event[
+                    "Beat alignment"
+                ]
+                + 0.10
+                * before_gap
+                + 0.08
+                * structural_novelty,
+                0.0,
+                1.0,
+            )
+        )
+
+        build_path = float(
+            np.clip(
+                0.38
+                * event[
+                    "Build before"
+                ]
+                + 0.24
+                * event[
+                    "Hit strength"
+                ]
+                + 0.14
+                * event[
+                    "Local prominence"
+                ]
+                + 0.08
+                * event[
+                    "Beat alignment"
+                ]
+                + 0.10
+                * structural_novelty
+                + 0.06
+                * before_gap,
+                0.0,
+                1.0,
+            )
+        )
+
+        ending_path = float(
+            np.clip(
+                0.34
+                * quiet_after
+                + 0.24
+                * burst_payoff
+                + 0.18
+                * event[
+                    "Hit strength"
+                ]
+                + 0.10
+                * event[
+                    "Local prominence"
+                ]
+                + 0.06
+                * event[
+                    "Beat alignment"
+                ]
+                + 0.08
+                * after_gap,
+                0.0,
+                1.0,
+            )
+        )
+
+        rhythmic_path = float(
+            np.clip(
+                0.27
+                * event[
+                    "Hit strength"
+                ]
+                + 0.23
+                * event[
+                    "Local prominence"
+                ]
+                + 0.22
+                * event[
+                    "Beat alignment"
+                ]
+                + 0.18
+                * structural_novelty
+                + 0.10
+                * max(
+                    before_gap,
+                    after_gap,
+                ),
+                0.0,
+                1.0,
+            )
+        )
+
+        pathways = {
+            "Structural change": (
+                change_path
+            ),
+            "Release after quiet": (
+                release_path
+            ),
+            "Build payoff": (
+                build_path
+            ),
+            "Phrase/burst ending": (
+                ending_path
+            ),
+            "Rhythmic anchor": (
+                rhythmic_path
+            ),
+        }
+
+        ordered_paths = sorted(
+            pathways.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+
+        (
+            top_path_name,
+            top_path_score,
+        ) = ordered_paths[0]
+
+        second_path_score = (
+            ordered_paths[1][1]
+        )
+
+        anchor_score = (
+            top_path_score
+        )
+
+        if second_path_score >= 0.66:
+            anchor_score += 0.04
+
+        if (
+            musical_quality
+            >= 0.82
+            and anchor_score
+            >= 0.62
+        ):
+            anchor_score += 0.03
+
+        anchor_score = float(
+            np.clip(
+                anchor_score,
+                0.0,
+                1.0,
+            )
+        )
+
+        reasons = [
+            top_path_name
+        ]
+
+        if (
+            structural_novelty
+            >= 0.65
+        ):
+            reasons.append(
+                "Strong musical change"
+            )
+
+        if tonal_change >= 0.70:
+            reasons.append(
+                "Tonal/harmonic change"
+            )
+
+        if rhythm_change >= 0.70:
+            reasons.append(
+                "Rhythm change"
+            )
+
+        if (
+            max(
+                event[
+                    "Pause before"
+                ],
+                long_quiet_before,
+            )
+            >= 0.55
+        ):
+            reasons.append(
+                "Quiet before"
+            )
+
+        if (
+            event[
+                "Build before"
+            ]
+            >= 0.55
+        ):
+            reasons.append(
+                "After build"
+            )
+
+        if quiet_after >= 0.58:
+            reasons.append(
+                "Quiet after"
+            )
+
+        if burst_payoff >= 0.62:
+            reasons.append(
+                "End of dense passage"
+            )
+
+        if before_gap >= 0.70:
+            reasons.append(
+                "Exposed after hold"
+            )
+
+        if after_gap >= 0.70:
+            reasons.append(
+                "Exposed before hold"
+            )
+
+        if anchor_score >= 0.82:
+            anchor_tier = (
+                "CORE"
+            )
+
+        elif anchor_score >= 0.70:
+            anchor_tier = (
+                "LIKELY"
+            )
+
+        elif anchor_score >= 0.60:
+            anchor_tier = (
+                "POSSIBLE"
+            )
+
+        else:
+            anchor_tier = (
+                "SUPPORT"
+            )
+
+        enriched = dict(
+            event
+        )
+
+        enriched.update(
+            {
+                "Anchor score": (
+                    anchor_score
+                ),
+                "Anchor tier": (
+                    anchor_tier
+                ),
+                "Anchor pathway": (
+                    top_path_name
+                ),
+                "Anchor reason": (
+                    " + ".join(
+                        reasons
+                    )
+                ),
+                "Musical quality": (
+                    musical_quality
+                ),
+                "Structural novelty": (
+                    structural_novelty
+                ),
+                "Tonal change": (
+                    tonal_change
+                ),
+                "Timbre change": (
+                    timbre_change
+                ),
+                "Rhythm change": (
+                    rhythm_change
+                ),
+                "Dynamics change": (
+                    dynamics_change
+                ),
+                "Long quiet before": (
+                    long_quiet_before
+                ),
+                "Quiet after": (
+                    quiet_after
+                ),
+                "Burst payoff": (
+                    burst_payoff
+                ),
+                "Before gap": (
+                    before_gap
+                ),
+                "After gap": (
+                    after_gap
+                ),
+                "Change path": (
+                    change_path
+                ),
+                "Release path": (
+                    release_path
+                ),
+                "Build path": (
+                    build_path
+                ),
+                "Ending path": (
+                    ending_path
+                ),
+                "Rhythmic path": (
+                    rhythmic_path
+                ),
+            }
+        )
+
+        output.append(
+            enriched
+        )
+
+    return output
+
+
+def collapse_anchor_alternatives_v2(
+    anchor_candidates,
+    beat_period,
+):
+    if not anchor_candidates:
+        return []
+
+    group_seconds = min(
+        0.95,
+        max(
+            0.72,
+            1.8
+            * beat_period,
+        ),
+    )
+
+    ordered = sorted(
+        anchor_candidates,
+        key=lambda item: item[
+            "Time"
+        ],
+    )
+
+    groups = []
+
+    current_group = [
+        ordered[0]
+    ]
+
+    group_start = (
+        ordered[0]["Time"]
+    )
+
+    for event in ordered[1:]:
+        if (
+            event["Time"]
+            - group_start
+            <= group_seconds
+        ):
+            current_group.append(
+                event
+            )
+
+        else:
+            groups.append(
+                current_group
+            )
+
+            current_group = [
+                event
+            ]
+
+            group_start = (
+                event["Time"]
+            )
+
+    groups.append(
+        current_group
+    )
+
+    selected = []
+
+    for group in groups:
+        best_score = max(
+            event[
+                "Anchor score"
+            ]
+            for event
+            in group
+        )
+
+        comparable = [
+            event
+            for event
+            in group
+            if event[
+                "Anchor score"
+            ]
+            >= (
+                best_score
+                - 0.075
+            )
+        ]
+
+        chosen = min(
+            comparable,
+            key=lambda item: item[
+                "Time"
+            ],
+        )
+
+        selected.append(
+            dict(
+                chosen
+            )
+        )
+
+    return selected
+
+
+def adjust_opening_anchor(
+    preview,
+    anchor_candidates,
+    beat_period,
+):
+    if not preview:
+        return preview
+
+    preview = sorted(
+        [
+            dict(
+                event
+            )
+            for event
+            in preview
+        ],
+        key=lambda item: item[
+            "Time"
+        ],
+    )
+
+    first = preview[0]
+
+    if first["Time"] > 2.5:
+        return preview
+
+    search_end = (
+        first["Time"]
+        + min(
+            1.05,
+            max(
+                0.55,
+                1.8
+                * beat_period,
+            ),
+        )
+    )
+
+    nearby = [
+        event
+        for event
+        in anchor_candidates
+        if (
+            first["Time"]
+            - 0.05
+            <= event["Time"]
+            <= search_end
+        )
+    ]
+
+    if len(nearby) <= 1:
+        return preview
+
+    def opening_score(
+        event,
+    ):
+        return (
+            0.50
+            * event[
+                "Beat alignment"
+            ]
+            + 0.24
+            * event[
+                "Hit strength"
+            ]
+            + 0.16
+            * event[
+                "Local prominence"
+            ]
+            + 0.10
+            * event[
+                "Structural novelty"
+            ]
+        )
+
+    current_opening_score = (
+        opening_score(
+            first
+        )
+    )
+
+    best = max(
+        nearby,
+        key=opening_score,
+    )
+
+    best_opening_score = (
+        opening_score(
+            best
+        )
+    )
+
+    clearly_better_rhythm = (
+        best["Time"]
+        > first["Time"]
+        + 0.12
+        and best[
+            "Beat alignment"
+        ]
+        >= first[
+            "Beat alignment"
+        ]
+        + 0.18
+        and best_opening_score
+        >= current_opening_score
+        - 0.06
+    )
+
+    very_early_pickup = (
+        first["Time"]
+        < 0.60
+        and best["Time"]
+        > first["Time"]
+        + 0.12
+        and best[
+            "Beat alignment"
+        ]
+        >= 0.72
+        and best_opening_score
+        >= current_opening_score
+        - 0.10
+    )
+
+    if (
+        clearly_better_rhythm
+        or very_early_pickup
+    ):
+        preview[0] = dict(
+            best
+        )
+
+        preview = sorted(
+            preview,
+            key=lambda item: item[
+                "Time"
+            ],
+        )
+
+        cleaned = []
+
+        for event in preview:
+            if not cleaned:
+                cleaned.append(
+                    event
+                )
+
+                continue
+
+            if (
+                event["Time"]
+                - cleaned[-1]["Time"]
+                < 0.18
+            ):
+                if (
+                    event[
+                        "Anchor score"
+                    ]
+                    > cleaned[-1][
+                        "Anchor score"
+                    ]
+                ):
+                    cleaned[-1] = (
+                        event
+                    )
+
+            else:
+                cleaned.append(
+                    event
+                )
+
+        preview = cleaned
+
+    return preview
+
+
+def build_anchor_v2_preview(
+    anchor_candidates,
+    analysis,
+):
+    if not anchor_candidates:
+        return []
+
+    beat_period = (
+        get_median_beat_period(
+            analysis[
+                "beat_times"
+            ]
+        )
+    )
+
+    preview_pool = []
+
+    for event in (
+        anchor_candidates
+    ):
+        keep = False
+
+        if (
+            event[
+                "Anchor score"
+            ]
+            >= 0.72
+        ):
+            keep = True
+
+        if (
+            event[
+                "Change path"
+            ]
+            >= 0.68
+            and event[
+                "Structural novelty"
+            ]
+            >= 0.62
+            and event[
+                "Hit strength"
+            ]
+            >= 0.44
+        ):
+            keep = True
+
+        if (
+            event[
+                "Release path"
+            ]
+            >= 0.70
+            and max(
+                event[
+                    "Pause before"
+                ],
+                event[
+                    "Long quiet before"
+                ],
+            )
+            >= 0.48
+        ):
+            keep = True
+
+        if (
+            event[
+                "Build path"
+            ]
+            >= 0.70
+            and event[
+                "Build before"
+            ]
+            >= 0.52
+        ):
+            keep = True
+
+        if (
+            event[
+                "Ending path"
+            ]
+            >= 0.70
+            and (
+                event[
+                    "Quiet after"
+                ]
+                >= 0.48
+                or event[
+                    "Burst payoff"
+                ]
+                >= 0.58
+            )
+        ):
+            keep = True
+
+        if (
+            event[
+                "Rhythmic path"
+            ]
+            >= 0.73
+            and event[
+                "Beat alignment"
+            ]
+            >= 0.72
+            and event[
+                "Local prominence"
+            ]
+            >= 0.82
+            and (
+                event[
+                    "Structural novelty"
+                ]
+                >= 0.34
+                or max(
+                    event[
+                        "Before gap"
+                    ],
+                    event[
+                        "After gap"
+                    ],
+                )
+                >= 0.62
+            )
+        ):
+            keep = True
+
+        if keep:
+            preview_pool.append(
+                event
+            )
+
+    preview = (
+        collapse_anchor_alternatives_v2(
+            preview_pool,
+            beat_period,
+        )
+    )
+
+    preview = (
+        adjust_opening_anchor(
+            preview,
+            anchor_candidates,
+            beat_period,
+        )
+    )
+
+    return preview
+
+
+def anchor_v2_dataframe(
+    anchor_candidates,
+    song_name,
+):
+    rows = []
+
+    for event in (
+        anchor_candidates
+    ):
+        rows.append(
+            {
+                "Song": song_name,
+                "Time": format_time(
+                    event["Time"]
+                ),
+                "Seconds": round(
+                    event["Time"],
+                    3,
+                ),
+                "Anchor tier": event[
+                    "Anchor tier"
+                ],
+                "Anchor score": round(
+                    event[
+                        "Anchor score"
+                    ],
+                    3,
+                ),
+                "Anchor pathway": event[
+                    "Anchor pathway"
+                ],
+                "Anchor reason": event[
+                    "Anchor reason"
+                ],
+                "Structural novelty": round(
+                    event[
+                        "Structural novelty"
+                    ],
+                    3,
+                ),
+                "Tonal change": round(
+                    event[
+                        "Tonal change"
+                    ],
+                    3,
+                ),
+                "Timbre change": round(
+                    event[
+                        "Timbre change"
+                    ],
+                    3,
+                ),
+                "Rhythm change": round(
+                    event[
+                        "Rhythm change"
+                    ],
+                    3,
+                ),
+                "Dynamics change": round(
+                    event[
+                        "Dynamics change"
+                    ],
+                    3,
+                ),
+                "Quiet before": round(
+                    event[
+                        "Long quiet before"
+                    ],
+                    3,
+                ),
+                "Quiet after": round(
+                    event[
+                        "Quiet after"
+                    ],
+                    3,
+                ),
+                "Burst payoff": round(
+                    event[
+                        "Burst payoff"
+                    ],
+                    3,
+                ),
+                "Before gap": round(
+                    event[
+                        "Before gap"
+                    ],
+                    3,
+                ),
+                "After gap": round(
+                    event[
+                        "After gap"
+                    ],
+                    3,
+                ),
+                "Hit": round(
+                    event[
+                        "Hit strength"
+                    ],
+                    3,
+                ),
+                "Prominence": round(
+                    event[
+                        "Local prominence"
+                    ],
+                    3,
+                ),
+                "Beat": round(
+                    event[
+                        "Beat alignment"
+                    ],
+                    3,
+                ),
+                "Pause": round(
+                    event[
+                        "Pause before"
+                    ],
+                    3,
+                ),
+                "Build": round(
+                    event[
+                        "Build before"
+                    ],
+                    3,
+                ),
+                "Bass": round(
+                    event[
+                        "Bass"
+                    ],
+                    3,
+                ),
+                "High": round(
+                    event[
+                        "High / tonal"
+                    ],
+                    3,
+                ),
+                "Event": event[
+                    "Event"
+                ],
+            }
+        )
+
+    return pd.DataFrame(
+        rows
+    )
+
+
 def render_checkerboard_reference(
     audio_path,
     cut_times,
@@ -3276,7 +5604,7 @@ def render_checkerboard_reference(
     fps_value,
     fps_ffmpeg,
     work_dir,
-    output_name="detectthebeat_anchor_test.mp4",
+    output_name="anchor_v2.mp4",
 ):
     total_video_frames = (
         math.ceil(
@@ -3316,7 +5644,7 @@ def render_checkerboard_reference(
 
     raw_video_path = (
         work_dir
-        / "anchor_reference.rgb"
+        / "anchor_v2.rgb"
     )
 
     change_index = 0
@@ -3432,591 +5760,6 @@ def render_checkerboard_reference(
     )
 
 
-def calculate_anchor_isolation(
-    candidates,
-    window_seconds=1.25,
-):
-    if not candidates:
-        return []
-
-    times = np.asarray(
-        [
-            event["Time"]
-            for event
-            in candidates
-        ],
-        dtype=float,
-    )
-
-    isolation_values = []
-
-    for event_time in times:
-        nearby_count = int(
-            np.sum(
-                np.abs(
-                    times
-                    - event_time
-                )
-                <= window_seconds
-            )
-        )
-
-        isolation = (
-            1.0
-            - np.clip(
-                (
-                    nearby_count
-                    - 1
-                )
-                / 10.0,
-                0.0,
-                1.0,
-            )
-        )
-
-        isolation_values.append(
-            float(
-                isolation
-            )
-        )
-
-    return (
-        isolation_values
-    )
-
-
-def calculate_anchor_candidates(
-    editorial_candidates,
-):
-    if not editorial_candidates:
-        return []
-
-    candidates = sorted(
-        [
-            dict(
-                event
-            )
-            for event
-            in editorial_candidates
-        ],
-        key=lambda item: item[
-            "Time"
-        ],
-    )
-
-    isolation_values = (
-        calculate_anchor_isolation(
-            candidates,
-            window_seconds=1.25,
-        )
-    )
-
-    scored = []
-
-    for (
-        event,
-        isolation,
-    ) in zip(
-        candidates,
-        isolation_values,
-    ):
-        distinctive = max(
-            event["Bass"],
-            event[
-                "High / tonal"
-            ],
-        )
-
-        musical_prominence = (
-            0.45
-            * event[
-                "Hit strength"
-            ]
-            + 0.35
-            * event[
-                "Local prominence"
-            ]
-            + 0.10
-            * distinctive
-            + 0.10
-            * event[
-                "Editorial score"
-            ]
-        )
-
-        anchor_score = (
-            0.30
-            * musical_prominence
-            + 0.25
-            * event[
-                "Pause before"
-            ]
-            + 0.20
-            * event[
-                "Build before"
-            ]
-            + 0.15
-            * isolation
-            + 0.10
-            * event[
-                "Beat alignment"
-            ]
-        )
-
-        reasons = []
-
-        if (
-            event["Pause before"]
-            >= 0.42
-            and event[
-                "Hit strength"
-            ]
-            >= 0.40
-        ):
-            anchor_score += (
-                0.18
-            )
-
-            reasons.append(
-                "Release after quiet/pause"
-            )
-
-        if (
-            event["Build before"]
-            >= 0.55
-            and event[
-                "Hit strength"
-            ]
-            >= 0.40
-        ):
-            anchor_score += (
-                0.18
-            )
-
-            reasons.append(
-                "Build payoff"
-            )
-
-        if (
-            event[
-                "Hit strength"
-            ]
-            >= 0.82
-            and event[
-                "Local prominence"
-            ]
-            >= 0.90
-        ):
-            anchor_score += (
-                0.10
-            )
-
-            reasons.append(
-                "Exceptional hit"
-            )
-
-        if (
-            max(
-                event[
-                    "High / tonal"
-                ],
-                event[
-                    "Bass"
-                ],
-            )
-            >= 0.80
-            and event[
-                "Hit strength"
-            ]
-            >= 0.65
-        ):
-            anchor_score += (
-                0.08
-            )
-
-            reasons.append(
-                "Distinctive musical accent"
-            )
-
-        if (
-            event[
-                "Local prominence"
-            ]
-            >= 0.95
-            and event[
-                "Hit strength"
-            ]
-            >= 0.68
-        ):
-            anchor_score += (
-                0.06
-            )
-
-            reasons.append(
-                "Locally dominant hit"
-            )
-
-        if (
-            event[
-                "Beat alignment"
-            ]
-            >= 0.85
-            and event[
-                "Hit strength"
-            ]
-            >= 0.64
-            and event[
-                "Local prominence"
-            ]
-            >= 0.85
-        ):
-            anchor_score += (
-                0.12
-            )
-
-            reasons.append(
-                "Strong rhythmic anchor"
-            )
-
-        if isolation >= 0.65:
-            reasons.append(
-                "Isolated / exposed moment"
-            )
-
-        anchor_score = float(
-            np.clip(
-                anchor_score,
-                0.0,
-                1.0,
-            )
-        )
-
-        if (
-            anchor_score
-            >= 0.78
-        ):
-            anchor_tier = (
-                "CORE"
-            )
-
-        elif (
-            anchor_score
-            >= 0.66
-        ):
-            anchor_tier = (
-                "LIKELY"
-            )
-
-        elif (
-            anchor_score
-            >= 0.54
-        ):
-            anchor_tier = (
-                "POSSIBLE"
-            )
-
-        else:
-            anchor_tier = (
-                "SUPPORT"
-            )
-
-        enriched = dict(
-            event
-        )
-
-        enriched[
-            "Anchor score"
-        ] = anchor_score
-
-        enriched[
-            "Anchor tier"
-        ] = anchor_tier
-
-        enriched[
-            "Anchor reason"
-        ] = (
-            " + ".join(
-                reasons
-            )
-            if reasons
-            else (
-                "General musical prominence"
-            )
-        )
-
-        enriched[
-            "Isolation"
-        ] = isolation
-
-        enriched[
-            "Musical prominence"
-        ] = float(
-            np.clip(
-                musical_prominence,
-                0.0,
-                1.0,
-            )
-        )
-
-        scored.append(
-            enriched
-        )
-
-    return scored
-
-
-def collapse_anchor_alternatives(
-    anchor_candidates,
-    group_seconds=0.70,
-    earlier_preference_margin=0.055,
-):
-    if not anchor_candidates:
-        return []
-
-    ordered = sorted(
-        anchor_candidates,
-        key=lambda item: item[
-            "Time"
-        ],
-    )
-
-    groups = []
-
-    current_group = [
-        ordered[0]
-    ]
-
-    group_start = (
-        ordered[0]["Time"]
-    )
-
-    for event in ordered[1:]:
-        if (
-            event["Time"]
-            - group_start
-            <= group_seconds
-        ):
-            current_group.append(
-                event
-            )
-
-        else:
-            groups.append(
-                current_group
-            )
-
-            current_group = [
-                event
-            ]
-
-            group_start = (
-                event["Time"]
-            )
-
-    groups.append(
-        current_group
-    )
-
-    selected = []
-
-    for group in groups:
-        best_score = max(
-            event[
-                "Anchor score"
-            ]
-            for event
-            in group
-        )
-
-        comparable = [
-            event
-            for event
-            in group
-            if event[
-                "Anchor score"
-            ]
-            >= (
-                best_score
-                - earlier_preference_margin
-            )
-        ]
-
-        chosen = min(
-            comparable,
-            key=lambda item: item[
-                "Time"
-            ],
-        )
-
-        selected.append(
-            dict(
-                chosen
-            )
-        )
-
-    return selected
-
-
-def build_anchor_preview(
-    anchor_candidates,
-):
-    preview_pool = []
-
-    for event in (
-        anchor_candidates
-    ):
-        keep = False
-
-        if (
-            event[
-                "Anchor score"
-            ]
-            >= 0.66
-        ):
-            keep = True
-
-        if (
-            event[
-                "Pause before"
-            ]
-            >= 0.45
-            and event[
-                "Hit strength"
-            ]
-            >= 0.40
-            and event[
-                "Anchor score"
-            ]
-            >= 0.52
-        ):
-            keep = True
-
-        if (
-            event[
-                "Build before"
-            ]
-            >= 0.55
-            and event[
-                "Hit strength"
-            ]
-            >= 0.40
-            and event[
-                "Anchor score"
-            ]
-            >= 0.52
-        ):
-            keep = True
-
-        if keep:
-            preview_pool.append(
-                event
-            )
-
-    return (
-        collapse_anchor_alternatives(
-            preview_pool,
-            group_seconds=0.70,
-            earlier_preference_margin=0.055,
-        )
-    )
-
-
-def anchor_dataframe(
-    anchor_candidates,
-    song_name,
-):
-    rows = []
-
-    for event in (
-        anchor_candidates
-    ):
-        rows.append(
-            {
-                "Song": song_name,
-                "Time": format_time(
-                    event["Time"]
-                ),
-                "Seconds": round(
-                    event["Time"],
-                    3,
-                ),
-                "Anchor tier": event[
-                    "Anchor tier"
-                ],
-                "Anchor score": round(
-                    event[
-                        "Anchor score"
-                    ],
-                    3,
-                ),
-                "Anchor reason": event[
-                    "Anchor reason"
-                ],
-                "Event": event[
-                    "Event"
-                ],
-                "Editorial score": round(
-                    event[
-                        "Editorial score"
-                    ],
-                    2,
-                ),
-                "Hit": round(
-                    event[
-                        "Hit strength"
-                    ],
-                    2,
-                ),
-                "Prominence": round(
-                    event[
-                        "Local prominence"
-                    ],
-                    2,
-                ),
-                "Beat": round(
-                    event[
-                        "Beat alignment"
-                    ],
-                    2,
-                ),
-                "Pause": round(
-                    event[
-                        "Pause before"
-                    ],
-                    2,
-                ),
-                "Build": round(
-                    event[
-                        "Build before"
-                    ],
-                    2,
-                ),
-                "Isolation": round(
-                    event[
-                        "Isolation"
-                    ],
-                    2,
-                ),
-                "Bass": round(
-                    event[
-                        "Bass"
-                    ],
-                    2,
-                ),
-                "High": round(
-                    event[
-                        "High / tonal"
-                    ],
-                    2,
-                ),
-            }
-        )
-
-    return pd.DataFrame(
-        rows
-    )
-
-
 mode = st.radio(
     "Mode",
     [
@@ -4052,7 +5795,8 @@ if mode == "Song Analyzer":
     st.write(
         "Song Analyzer finds beats, hits, pauses, "
         "build-ups and distinctive musical accents. "
-        "It does not choose Smart Edit cuts yet."
+        "Anchor v2 also calculates harmonic/timbral "
+        "information internally for Smart Edit."
     )
 
     if uploaded_file is not None:
@@ -4181,18 +5925,19 @@ if mode == "Song Analyzer":
 
 elif mode == "Smart Edit":
     st.write(
-        "This version tests the P1 anchor detector first. "
-        "It tries to find the musical moments that would "
-        "feel wrong to ignore. We are deliberately not "
-        "adding P2 filler cuts yet."
+        "Anchor v2 is still a P1-first test. "
+        "It now looks for structural musical change, "
+        "first hits after quiet, final hits before quiet, "
+        "build payoffs, rhythmic anchors and opening pickup mistakes. "
+        "P2 filler is deliberately not added yet."
     )
 
     st.subheader(
-        "Anchor test settings"
+        "Anchor v2 settings"
     )
 
     st.caption(
-        "Output: 16:9 · 1920×1080 · P1 anchor preview only"
+        "Output: 16:9 · 1920×1080 · P1 anchor preview"
     )
 
     smart_fps_choice = st.radio(
@@ -4202,7 +5947,7 @@ elif mode == "Smart Edit":
             "23.976 fps",
         ],
         horizontal=True,
-        key="smart_anchor_fps",
+        key="anchor_v2_fps",
     )
 
     SMART_FPS_VALUE = (
@@ -4228,29 +5973,29 @@ elif mode == "Smart Edit":
                 uploaded_file.getvalue()
             ),
             smart_fps_choice,
-            "anchor-test-v1",
+            "anchor-v2",
         )
 
         if (
             st.session_state.get(
-                "smart_anchor_signature"
+                "anchor_v2_signature"
             )
             != smart_signature
         ):
             st.session_state.pop(
-                "smart_anchor_result",
+                "anchor_v2_result",
                 None,
             )
 
         if st.button(
-            "🎯 Analyze P1 anchors",
+            "🎯 Analyze P1 anchors v2",
             type="primary",
         ):
             status = None
 
             try:
                 status = st.status(
-                    "Finding P1 anchors...",
+                    "Finding Anchor v2 P1 moments...",
                     expanded=True,
                 )
 
@@ -4260,7 +6005,7 @@ elif mode == "Smart Edit":
                     )
 
                     status.write(
-                        "1/6 · Preparing audio"
+                        "1/7 · Preparing audio"
                     )
 
                     audio_path = (
@@ -4302,7 +6047,7 @@ elif mode == "Smart Edit":
                     )
 
                     status.write(
-                        "2/6 · Reading waveform"
+                        "2/7 · Reading waveform"
                     )
 
                     y, sr = (
@@ -4316,7 +6061,7 @@ elif mode == "Smart Edit":
                     )
 
                     status.write(
-                        "3/6 · Building musical event map"
+                        "3/7 · Detecting beats, hits, harmony and timbre"
                     )
 
                     analysis = (
@@ -4324,6 +6069,10 @@ elif mode == "Smart Edit":
                             y,
                             sr,
                         )
+                    )
+
+                    status.write(
+                        "4/7 · Building sensitive editorial candidate map"
                     )
 
                     builds = (
@@ -4351,18 +6100,21 @@ elif mode == "Smart Edit":
                     )
 
                     status.write(
-                        "4/6 · Calculating contextual Anchor Score"
+                        "5/7 · Scoring structural and contextual P1 pathways"
                     )
 
                     anchor_candidates = (
-                        calculate_anchor_candidates(
-                            editorial_candidates
+                        calculate_anchor_v2_candidates(
+                            editorial_candidates,
+                            analysis,
+                            sr,
                         )
                     )
 
                     anchor_preview = (
-                        build_anchor_preview(
-                            anchor_candidates
+                        build_anchor_v2_preview(
+                            anchor_candidates,
+                            analysis,
                         )
                     )
 
@@ -4373,21 +6125,21 @@ elif mode == "Smart Edit":
                     )
 
                     full_anchor_dataframe = (
-                        anchor_dataframe(
+                        anchor_v2_dataframe(
                             anchor_candidates,
                             song_name,
                         )
                     )
 
                     preview_dataframe = (
-                        anchor_dataframe(
+                        anchor_v2_dataframe(
                             anchor_preview,
                             song_name,
                         )
                     )
 
                     status.write(
-                        "5/6 · Building anchor-only checkerboard preview"
+                        "6/7 · Building frame-accurate checkerboard preview"
                     )
 
                     preview_times = [
@@ -4399,66 +6151,66 @@ elif mode == "Smart Edit":
                     (
                         video_bytes,
                         scene_frames,
-                    ) = (
-                        render_checkerboard_reference(
-                            audio_path=audio_path,
-                            cut_times=preview_times,
-                            total_duration=total_duration,
-                            fps_value=SMART_FPS_VALUE,
-                            fps_ffmpeg=SMART_FPS_FFMPEG,
-                            work_dir=work_dir,
-                            output_name="anchor_test.mp4",
-                        )
+                    ) = render_checkerboard_reference(
+                        audio_path=audio_path,
+                        cut_times=preview_times,
+                        total_duration=total_duration,
+                        fps_value=SMART_FPS_VALUE,
+                        fps_ffmpeg=SMART_FPS_FFMPEG,
+                        work_dir=work_dir,
+                        output_name="anchor_v2.mp4",
                     )
 
                     status.write(
-                        "6/6 · Finalizing anchor report"
-                    )
-
-                    beat_times = (
-                        analysis[
-                            "beat_times"
-                        ]
+                        "7/7 · Finalizing Anchor v2 report"
                     )
 
                     beat_period = (
                         get_median_beat_period(
-                            beat_times
+                            analysis[
+                                "beat_times"
+                            ]
                         )
                     )
 
                     tempo = (
                         60.0
                         / beat_period
-                        if beat_period
-                        > 0
+                        if beat_period > 0
+                        else 0.0
+                    )
+
+                    event_rate = (
+                        len(events)
+                        / total_duration
+                        if total_duration > 0
                         else 0.0
                     )
 
                     video_filename = (
                         f"{song_name}_"
                         f"DetectTheBeat_"
-                        f"AnchorTest.mp4"
+                        f"AnchorV2.mp4"
                     )
 
                     anchor_csv_filename = (
                         f"{song_name}_"
                         f"DetectTheBeat_"
-                        f"AnchorAnalysis.csv"
+                        f"AnchorV2_Analysis.csv"
                     )
 
                     preview_csv_filename = (
                         f"{song_name}_"
                         f"DetectTheBeat_"
-                        f"AnchorPreview.csv"
+                        f"AnchorV2_Preview.csv"
                     )
 
                 st.session_state[
-                    "smart_anchor_signature"
+                    "anchor_v2_signature"
                 ] = smart_signature
 
                 st.session_state[
-                    "smart_anchor_result"
+                    "anchor_v2_result"
                 ] = {
                     "video_bytes": video_bytes,
                     "video_filename": video_filename,
@@ -4476,12 +6228,13 @@ elif mode == "Smart Edit":
                         events
                     ),
                     "tempo": tempo,
+                    "event_rate": event_rate,
                     "merged_micro_hits": merged_micro_hits,
                     "suppressed_pause_hits": suppressed_pause_hits,
                 }
 
                 status.update(
-                    label="P1 anchor analysis ready",
+                    label="Anchor v2 analysis ready",
                     state="complete",
                     expanded=False,
                 )
@@ -4493,7 +6246,7 @@ elif mode == "Smart Edit":
                 ):
                     try:
                         status.update(
-                            label="Anchor analysis failed",
+                            label="Anchor v2 analysis failed",
                             state="error",
                         )
 
@@ -4501,7 +6254,7 @@ elif mode == "Smart Edit":
                         pass
 
                 st.error(
-                    "Anchor analysis failed."
+                    "Anchor v2 analysis failed."
                 )
 
                 st.code(
@@ -4512,7 +6265,7 @@ elif mode == "Smart Edit":
 
         smart_result = (
             st.session_state.get(
-                "smart_anchor_result"
+                "anchor_v2_result"
             )
         )
 
@@ -4520,12 +6273,12 @@ elif mode == "Smart Edit":
             smart_result
             is not None
             and st.session_state.get(
-                "smart_anchor_signature"
+                "anchor_v2_signature"
             )
             == smart_signature
         ):
             st.success(
-                f"Anchor preview contains "
+                f"Anchor v2 preview contains "
                 f"{smart_result['preview_count']} "
                 f"scene changes."
             )
@@ -4534,11 +6287,12 @@ elif mode == "Smart Edit":
                 metric1,
                 metric2,
                 metric3,
-            ) = st.columns(3)
+                metric4,
+            ) = st.columns(4)
 
             with metric1:
                 st.metric(
-                    "Anchor preview",
+                    "P1 preview",
                     smart_result[
                         "preview_count"
                     ],
@@ -4546,7 +6300,7 @@ elif mode == "Smart Edit":
 
             with metric2:
                 st.metric(
-                    "Editorial candidates",
+                    "Candidates",
                     smart_result[
                         "candidate_count"
                     ],
@@ -4560,13 +6314,19 @@ elif mode == "Smart Edit":
                     ),
                 )
 
+            with metric4:
+                st.metric(
+                    "Event rate",
+                    (
+                        f"{smart_result['event_rate']:.1f}/s"
+                    ),
+                )
+
             st.caption(
-                f"Built from "
-                f"{smart_result['raw_event_count']} "
-                f"raw events. "
-                "This preview is intentionally biased "
-                "toward catching P1 moments; it is not "
-                "the final Balanced cut list."
+                "This is still intentionally a P1 calibration preview, "
+                "not final Balanced. The event-rate metric is saved for "
+                "later pacing work; Anchor v2 itself prioritizes musical "
+                "importance before cut density."
             )
 
             st.video(
@@ -4576,7 +6336,7 @@ elif mode == "Smart Edit":
             )
 
             st.download_button(
-                "📥 Download P1 anchor preview video",
+                "📥 Download Anchor v2 preview video",
                 data=smart_result[
                     "video_bytes"
                 ],
@@ -4588,15 +6348,15 @@ elif mode == "Smart Edit":
             )
 
             st.subheader(
-                "P1 anchor preview"
+                "Anchor v2 P1 preview"
             )
 
             st.caption(
-                "These are the events currently strong "
-                "enough to appear in the anchor-only preview. "
-                "Nearby alternatives under about 0.7 seconds "
-                "are collapsed, with a small preference for "
-                "the earlier hit when their scores are very similar."
+                "The pathway column shows why the event won: "
+                "structural change, release, build payoff, "
+                "phrase ending or rhythmic anchor. "
+                "Nearby alternatives are collapsed only when "
+                "they are genuinely close."
             )
 
             st.dataframe(
@@ -4605,7 +6365,7 @@ elif mode == "Smart Edit":
                 ],
                 use_container_width=True,
                 hide_index=True,
-                height=500,
+                height=520,
             )
 
             preview_csv_bytes = (
@@ -4621,7 +6381,7 @@ elif mode == "Smart Edit":
             )
 
             st.download_button(
-                "Download anchor preview CSV",
+                "Download Anchor v2 preview CSV",
                 data=preview_csv_bytes,
                 file_name=smart_result[
                     "preview_csv_filename"
@@ -4631,13 +6391,13 @@ elif mode == "Smart Edit":
             )
 
             with st.expander(
-                "Full Anchor Score analysis"
+                "Full Anchor v2 analysis"
             ):
                 st.caption(
-                    "Every editorial candidate is kept here, "
-                    "including lower-score events. This is the "
-                    "file we should compare with your P1/P2/P3 "
-                    "reference list when tuning the formula."
+                    "Use this CSV for calibration. "
+                    "It includes the separate structural, tonal, "
+                    "rhythm, quiet-before, quiet-after and "
+                    "burst-payoff signals."
                 )
 
                 st.dataframe(
@@ -4646,7 +6406,7 @@ elif mode == "Smart Edit":
                     ],
                     use_container_width=True,
                     hide_index=True,
-                    height=500,
+                    height=520,
                 )
 
                 full_csv_bytes = (
@@ -4662,7 +6422,7 @@ elif mode == "Smart Edit":
                 )
 
                 st.download_button(
-                    "Download full Anchor Analysis CSV",
+                    "Download full Anchor v2 Analysis CSV",
                     data=full_csv_bytes,
                     file_name=smart_result[
                         "anchor_csv_filename"
@@ -4672,16 +6432,14 @@ elif mode == "Smart Edit":
                 )
 
             st.info(
-                "For this test, listen/watch the anchor preview "
-                "and note which P1 moments are missing or which "
-                "preview cuts clearly feel only P2/P3. Then send "
-                "me the Anchor Analysis CSV. Once P1 recall is "
-                "strong, we will add selected P2 filler and build "
-                "Balanced around these anchors."
+                "For the next comparison, run Heron, Ikoliks and "
+                "Darklouds through this version and send me the "
+                "Preview + Analysis CSVs. The main target is P1 "
+                "recall first; P2 pacing comes after that."
             )
 
 
-else:
+elif mode == "Beat":
     st.write(
         "Beat mode creates a checkerboard "
         "reference video for Scene Edit Detection."
